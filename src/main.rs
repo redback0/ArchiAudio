@@ -6,8 +6,7 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{zwlr_foreign_toplevel_
 struct AppData;
 struct HandleData {
     title: String,
-    // do_swap: bool,
-    // pa_source: String,
+    comm: Option<std::process::Command>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,8 +55,7 @@ impl Dispatch<Manager::ZwlrForeignToplevelManagerV1, HandleVec> for AppData {
         Manager::EVT_TOPLEVEL_OPCODE => (Handle::ZwlrForeignToplevelHandleV1,
             Arc::new(HandleData {
                 title: String::new(),
-                // do_swap: false,
-                // pa_source: String::new(),
+                comm: None,
             }.into())),
     ]);
 }
@@ -85,12 +83,12 @@ impl Dispatch<Handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for AppData {
 }
 
 fn main() {
-    let handles = HandleVec::new(RwLock::new(vec![]));
+    let handles_lock = HandleVec::new(RwLock::new(vec![]));
 
     let conn: Connection = Connection::connect_to_env().unwrap();
     let (globals, mut event_queue) = registry_queue_init::<AppData>(&conn).unwrap();
 
-    let _toplevel_manager: Manager::ZwlrForeignToplevelManagerV1 = globals.bind(&event_queue.handle(), 3..=3, handles.clone()).unwrap();
+    let _toplevel_manager: Manager::ZwlrForeignToplevelManagerV1 = globals.bind(&event_queue.handle(), 3..=3, handles_lock.clone()).unwrap();
 
     let _ = event_queue.roundtrip(&mut AppData);
 
@@ -125,14 +123,71 @@ fn main() {
     };
 
     let pa_sources_json: Vec<PaSource> = serde_json::from_str(pa_sources_s).unwrap();
-    pa_sources_json.iter().for_each(|pa_source| {
-        println!("[{}] {}", pa_source.index, pa_source.name)
-    });
 
-    handles.read().unwrap().iter().for_each(|handle| {
-        println!("{}", handle.read().unwrap().title)
-    });
+    // all info obtained
 
+
+    
+
+    // ask the user what toplevels to associate with what pa sources
+    let stdin = std::io::stdin();
+    let mut buf = String::new();
+
+    // create scope to avoid calling .read().unwrap() constantly
+    {
+        let handles = handles_lock.read().unwrap();
+
+        loop {
+            handles.iter().enumerate().for_each(|(i, handle)| {
+                println!("[{}] {}", i, handle.read().unwrap().title)
+            });
+            println!("\nWhich window would you like to have swap? (leave empty to skip)");
+            buf.clear();
+            if stdin.read_line(&mut buf).unwrap_or(0) <= 1 { break };
+
+            let handle_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
+
+            println!("{}", handle_index);
+
+            if handle_index >= handles.len() {
+                println!("invalid index");
+                continue;
+            }
+
+            println!("\n");
+
+            pa_sources_json.iter().enumerate().for_each(|(i, pa_source)| {
+                println!("[{}] {}", i, pa_source.name)
+            });
+
+            println!("\nWhich source would you like to have \"{}\" swap to?", handles[handle_index].read().unwrap().title);
+            buf.clear();
+            if stdin.read_line(&mut buf).unwrap_or(0) <= 1 {
+                println!("invalid index");
+                continue;
+            };
+
+            let pa_source_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
+
+            if pa_source_index >= pa_sources_json.len() {
+                println!("invalid index");
+                continue;
+            }
+
+            let mut comm = std::process::Command::new("pactl");
+            comm.args([
+                "move_source_output",
+                loopback_id,
+                pa_sources_json[pa_source_index].index.to_string().as_str(),
+            ]);
+
+            handles[handle_index].write().unwrap().comm = Some(comm);
+        }
+
+        println!("\n");
+    }
+
+    println!("setup complete");
 
     // start thread for wayland events
     std::thread::spawn(move || {
@@ -145,6 +200,6 @@ fn main() {
     let stdin = std::io::stdin();
     let mut buf = String::new();
     loop {
-        let _ = stdin.read_line(&mut buf);
+        if stdin.read_line(&mut buf).unwrap_or(0) > 0 && buf == "exit" { break };
     }
 }

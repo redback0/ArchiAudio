@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc::TryRecvError};
 use serde::{Deserialize, Serialize};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child, globals::{GlobalListContents, registry_queue_init}, protocol::wl_registry};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{zwlr_foreign_toplevel_manager_v1 as Manager, zwlr_foreign_toplevel_handle_v1 as Handle};
@@ -75,8 +75,13 @@ impl Dispatch<Handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for AppData {
         }
         else if let Handle::Event::State { state } = event {
             if state.contains(&2) {
-                // println!("Active: {}", handle_data_lock.read().unwrap().title);
+                let mut handle_data = handle_data_lock.write().unwrap();
+                println!("Active: {}", handle_data.title);
                 // handle audio swap here
+                if let Some(comm) = handle_data.comm.as_mut() {
+                    println!("{} {:?}", comm.get_program().to_str().unwrap(), comm.get_args());
+                    let _ = comm.spawn();
+                }
             }
         }
     }
@@ -104,10 +109,10 @@ fn main() {
         .output().expect("failed to get loopback ID").stdout;
 
     let loopback_id = match str::from_utf8(&loopback_id_raw) {
-        Ok(v) => v,
+        Ok(v) => v.trim(),
         Err(e) => panic!("wtf happened: {}", e),
     };
-    assert!(loopback_id.len() > 0 && loopback_id.find('\n').is_some_and(|i| {i == loopback_id.len() - 1}));
+    assert!(loopback_id.len() > 0);
 
 
     let pa_sources_raw = std::process::Command::new("sh")
@@ -174,11 +179,10 @@ fn main() {
                 continue;
             }
 
-            let mut comm = std::process::Command::new("pactl");
+            let mut comm = std::process::Command::new("sh");
             comm.args([
-                "move_source_output",
-                loopback_id,
-                pa_sources_json[pa_source_index].index.to_string().as_str(),
+                "-c",
+                format!("pactl move-source-output {} {}", loopback_id, pa_sources_json[pa_source_index].index.to_string().as_str()).as_str(),
             ]);
 
             handles[handle_index].write().unwrap().comm = Some(comm);
@@ -190,16 +194,25 @@ fn main() {
     println!("setup complete");
 
     // start thread for wayland events
+    let (tx, rx) = std::sync::mpsc::channel();
+
     std::thread::spawn(move || {
         loop {
-            let _ = event_queue.blocking_dispatch(&mut AppData);
+            let _ = event_queue.dispatch_pending(&mut AppData);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            match rx.try_recv() {
+                Ok(_) | Err(TryRecvError::Disconnected) => { break }
+                Err(TryRecvError::Empty) => {}
+            }
         }
     });
 
-    // todo: add logic for exit
-    let stdin = std::io::stdin();
-    let mut buf = String::new();
+
     loop {
-        if stdin.read_line(&mut buf).unwrap_or(0) > 0 && buf == "exit" { break };
+        if stdin.read_line(&mut buf).unwrap_or(0) > 0 && buf.trim() == "exit" { break };
     }
+
+    println!("exiting...");
+    let _ = tx.send(());
 }

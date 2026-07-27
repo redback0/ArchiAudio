@@ -1,26 +1,19 @@
 use serde::{Deserialize, Serialize};
-use wayland_client::{Connection, Dispatch, Proxy, event_created_child, globals};
-use wayland_protocols_wlr::foreign_toplevel::v1::client::{zwlr_foreign_toplevel_manager_v1 as top_level_manager, zwlr_foreign_toplevel_handle_v1 as top_level_handle};
+use wayland_client::{Connection, Dispatch, Proxy};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_manager_v1 as top_level_manager,
+    zwlr_foreign_toplevel_handle_v1 as top_level_handle
+};
 
-trait Action: Send + Sync {
+mod command_action;
+use command_action::CommandAction;
+
+pub trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
 }
 
-struct CommandAction {
-    comm: std::process::Command,
-}
-
-impl Action for CommandAction {
-    fn trigger(&mut self) -> Result<(), String> {
-        match self.comm.spawn() {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed to run command: {}", e)),
-        }
-    }
-}
-
 struct AppData;
-struct HandleActions {
+struct TLHandleActions {
     title: String,
     actions: Vec<std::boxed::Box<dyn Action>>,
 }
@@ -31,7 +24,7 @@ struct PaSource {
     name: String,
 }
 
-type HandleWrapper = std::sync::Arc<std::sync::RwLock<HandleActions>>;
+type HandleWrapper = std::sync::Arc<std::sync::RwLock<TLHandleActions>>;
 type HandleVec = std::sync::Arc<std::sync::RwLock<Vec<HandleWrapper>>>;
 
 impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for AppData {
@@ -39,7 +32,7 @@ impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client:
         _: &mut Self,
         _: &wayland_client::protocol::wl_registry::WlRegistry,
         _event: wayland_client::protocol::wl_registry::Event,
-        _data: &globals::GlobalListContents,
+        _data: &wayland_client::globals::GlobalListContents,
         _: &wayland_client::Connection,
         _: &wayland_client::QueueHandle<AppData>,
     ) {
@@ -68,9 +61,9 @@ impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for Ap
         }
     }
 
-    event_created_child!(AppData, top_level_manager::ZwlrForeignToplevelManagerV1, [
+    wayland_client::event_created_child!(AppData, top_level_manager::ZwlrForeignToplevelManagerV1, [
         top_level_manager::EVT_TOPLEVEL_OPCODE => (top_level_handle::ZwlrForeignToplevelHandleV1,
-            std::sync::Arc::new(HandleActions {
+            std::sync::Arc::new(TLHandleActions {
                 title: String::new(),
                 actions: vec!(),
             }.into())),
@@ -110,7 +103,7 @@ fn main() {
     let handles_lock = HandleVec::new(std::sync::RwLock::new(vec![]));
 
     let conn: Connection = Connection::connect_to_env().unwrap();
-    let (globals, mut event_queue) = globals::registry_queue_init::<AppData>(&conn).unwrap();
+    let (globals, mut event_queue) = wayland_client::globals::registry_queue_init::<AppData>(&conn).unwrap();
 
     let _toplevel_manager: top_level_manager::ZwlrForeignToplevelManagerV1 = globals.bind(&event_queue.handle(), 3..=3, handles_lock.clone()).unwrap();
 
@@ -204,7 +197,7 @@ fn main() {
                 format!("pactl move-source-output {} {}", loopback_id, pa_sources_json[pa_source_index].index.to_string().as_str()).as_str(),
             ]);
 
-            handles[handle_index].write().unwrap().actions.push(std::boxed::Box::new(CommandAction{ comm: comm }));
+            handles[handle_index].write().unwrap().actions.push(std::boxed::Box::new(CommandAction::new(comm)));
         }
 
         println!("\n");

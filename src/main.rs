@@ -1,10 +1,9 @@
-use std::sync::{Arc, RwLock, mpsc::TryRecvError};
 use serde::{Deserialize, Serialize};
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child, globals::{GlobalListContents, registry_queue_init}, protocol::wl_registry};
-use wayland_protocols_wlr::foreign_toplevel::v1::client::{zwlr_foreign_toplevel_manager_v1 as Manager, zwlr_foreign_toplevel_handle_v1 as Handle};
+use wayland_client::{Connection, Dispatch, Proxy, event_created_child, globals};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{zwlr_foreign_toplevel_manager_v1 as top_level_manager, zwlr_foreign_toplevel_handle_v1 as top_level_handle};
 
 struct AppData;
-struct HandleData {
+struct HandleActions {
     title: String,
     comm: Option<std::process::Command>,
 }
@@ -15,31 +14,32 @@ struct PaSource {
     name: String,
 }
 
-type HandleWrapper = Arc<RwLock<HandleData>>;
-type HandleVec = Arc<RwLock<Vec<HandleWrapper>>>;
+type HandleWrapper = std::sync::Arc<std::sync::RwLock<HandleActions>>;
+type HandleVec = std::sync::Arc<std::sync::RwLock<Vec<HandleWrapper>>>;
 
-impl Dispatch<wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for AppData {
+impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for AppData {
     fn event(
         _: &mut Self,
-        _: &wl_registry::WlRegistry,
-        _event: wl_registry::Event,
-        _data: &GlobalListContents,
-        _: &Connection,
-        _: &QueueHandle<AppData>,
+        _: &wayland_client::protocol::wl_registry::WlRegistry,
+        _event: wayland_client::protocol::wl_registry::Event,
+        _data: &globals::GlobalListContents,
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<AppData>,
     ) {
+        // purposely empty
     }
 }
 
-impl Dispatch<Manager::ZwlrForeignToplevelManagerV1, HandleVec> for AppData {
+impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for AppData {
     fn event(
         _: &mut Self,
-        _: &Manager::ZwlrForeignToplevelManagerV1,
-        event: <Manager::ZwlrForeignToplevelManagerV1 as wayland_client::Proxy>::Event,
+        _: &top_level_manager::ZwlrForeignToplevelManagerV1,
+        event: <top_level_manager::ZwlrForeignToplevelManagerV1 as wayland_client::Proxy>::Event,
         data: &HandleVec,
-        _: &Connection,
-        _: &QueueHandle<Self>,
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
     ) {
-        if let Manager::Event::Toplevel { toplevel } = event {
+        if let top_level_manager::Event::Toplevel { toplevel } = event {
             let user_data: Option<&HandleWrapper> = toplevel.data();
 
             match user_data {
@@ -51,29 +51,29 @@ impl Dispatch<Manager::ZwlrForeignToplevelManagerV1, HandleVec> for AppData {
         }
     }
 
-    event_created_child!(AppData, Manager::ZwlrForeignToplevelManagerV1, [
-        Manager::EVT_TOPLEVEL_OPCODE => (Handle::ZwlrForeignToplevelHandleV1,
-            Arc::new(HandleData {
+    event_created_child!(AppData, top_level_manager::ZwlrForeignToplevelManagerV1, [
+        top_level_manager::EVT_TOPLEVEL_OPCODE => (top_level_handle::ZwlrForeignToplevelHandleV1,
+            std::sync::Arc::new(HandleActions {
                 title: String::new(),
                 comm: None,
             }.into())),
     ]);
 }
 
-impl Dispatch<Handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for AppData {
+impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for AppData {
     fn event(
         _: &mut Self,
-        _: &Handle::ZwlrForeignToplevelHandleV1,
-        event: <Handle::ZwlrForeignToplevelHandleV1 as wayland_client::Proxy>::Event,
+        _: &top_level_handle::ZwlrForeignToplevelHandleV1,
+        event: <top_level_handle::ZwlrForeignToplevelHandleV1 as wayland_client::Proxy>::Event,
         handle_data_lock: &HandleWrapper,
-        _: &Connection,
-        _: &QueueHandle<Self>,
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
     ) {
-        if let Handle::Event::Title { title } = event {
+        if let top_level_handle::Event::Title { title } = event {
             let mut handle_data = handle_data_lock.write().unwrap();
             handle_data.title = title;
         }
-        else if let Handle::Event::State { state } = event {
+        else if let top_level_handle::Event::State { state } = event {
             if state.contains(&2) {
                 let mut handle_data = handle_data_lock.write().unwrap();
                 println!("Active: {}", handle_data.title);
@@ -88,14 +88,14 @@ impl Dispatch<Handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for AppData {
 }
 
 fn main() {
-    let handles_lock = HandleVec::new(RwLock::new(vec![]));
+    let handles_lock = HandleVec::new(std::sync::RwLock::new(vec![]));
 
     let conn: Connection = Connection::connect_to_env().unwrap();
-    let (globals, mut event_queue) = registry_queue_init::<AppData>(&conn).unwrap();
+    let (globals, mut event_queue) = globals::registry_queue_init::<AppData>(&conn).unwrap();
 
-    let _toplevel_manager: Manager::ZwlrForeignToplevelManagerV1 = globals.bind(&event_queue.handle(), 3..=3, handles_lock.clone()).unwrap();
+    let _toplevel_manager: top_level_manager::ZwlrForeignToplevelManagerV1 = globals.bind(&event_queue.handle(), 3..=3, handles_lock.clone()).unwrap();
 
-    let _ = event_queue.roundtrip(&mut AppData);
+    event_queue.roundtrip(&mut AppData).unwrap();
 
     // init commands
 
@@ -194,17 +194,11 @@ fn main() {
     println!("setup complete");
 
     // start thread for wayland events
-    let (tx, rx) = std::sync::mpsc::channel();
+    // let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
         loop {
-            let _ = event_queue.dispatch_pending(&mut AppData);
-            std::thread::sleep(std::time::Duration::from_millis(500));
-
-            match rx.try_recv() {
-                Ok(_) | Err(TryRecvError::Disconnected) => { break }
-                Err(TryRecvError::Empty) => {}
-            }
+            event_queue.blocking_dispatch(&mut AppData).unwrap();
         }
     });
 
@@ -213,6 +207,6 @@ fn main() {
         if stdin.read_line(&mut buf).unwrap_or(0) > 0 && buf.trim() == "exit" { break };
     }
 
-    println!("exiting...");
-    let _ = tx.send(());
+    // println!("exiting...");
+    // let _ = tx.send(());
 }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use wayland_client::{Connection, Dispatch, Proxy, event_created_child, globals};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{zwlr_foreign_toplevel_manager_v1 as top_level_manager, zwlr_foreign_toplevel_handle_v1 as top_level_handle};
 
-trait Action {
+trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
 }
 
@@ -22,7 +22,7 @@ impl Action for CommandAction {
 struct AppData;
 struct HandleActions {
     title: String,
-    actions: Vec<std::boxed::Box<CommandAction>>,
+    actions: Vec<std::boxed::Box<dyn Action>>,
 }
 
 #[derive(Serialize, Deserialize)]

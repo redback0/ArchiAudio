@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use wayland_client::{Connection, Dispatch, Proxy};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_manager_v1 as top_level_manager,
@@ -6,7 +5,7 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 };
 
 mod command_action;
-use command_action::CommandAction;
+use crate::command_action::CommandActionGenerator;
 
 pub trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
@@ -16,12 +15,6 @@ struct AppData;
 struct TLHandleActions {
     title: String,
     actions: Vec<std::boxed::Box<dyn Action>>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct PaSource {
-    index: u32,
-    name: String,
 }
 
 type HandleWrapper = std::sync::Arc<std::sync::RwLock<TLHandleActions>>;
@@ -109,43 +102,6 @@ fn main() {
 
     event_queue.roundtrip(&mut AppData).unwrap();
 
-    // init commands
-
-    // absolute bs of a command, will be replaced with pipewire crate later
-    let loopback_id_raw = std::process::Command::new("sh")
-        .args([
-            "-c",
-            "pactl -f json list source-outputs | jq '.[] | select(.properties.\"node.group\" | select(type==\"string\") | test(\"^loopback.*$\")) | .index'",
-            // "pactl -f json list source-outputs"
-        ])
-        .output().expect("failed to get loopback ID").stdout;
-
-    let loopback_id = match str::from_utf8(&loopback_id_raw) {
-        Ok(v) => v.trim(),
-        Err(e) => panic!("wtf happened: {}", e),
-    };
-    assert!(loopback_id.len() > 0);
-
-
-    let pa_sources_raw = std::process::Command::new("sh")
-        .args([
-            "-c",
-            "pactl -f json list sources",
-        ])
-        .output().expect("failed to get sources").stdout;
-    
-    let pa_sources_s = match str::from_utf8(&pa_sources_raw) {
-        Ok(v) => v,
-        Err(e) => panic!("Unable to convert command output to string: {}", e),
-    };
-
-    let pa_sources_json: Vec<PaSource> = serde_json::from_str(pa_sources_s).unwrap();
-
-    // all info obtained
-
-
-    
-
     // ask the user what toplevels to associate with what pa sources
     let stdin = std::io::stdin();
     let mut buf = String::new();
@@ -153,6 +109,7 @@ fn main() {
     // create scope to avoid calling .read().unwrap() constantly
     {
         let handles = handles_lock.read().unwrap();
+        let command_action_generator = CommandActionGenerator::new();
 
         loop {
             handles.iter().enumerate().for_each(|(i, handle)| {
@@ -173,34 +130,13 @@ fn main() {
 
             println!("\n");
 
-            pa_sources_json.iter().enumerate().for_each(|(i, pa_source)| {
-                println!("[{}] {}", i, pa_source.name)
-            });
+            let comm = command_action_generator.build_action();
 
-            println!("\nWhich source would you like to have \"{}\" swap to?", handles[handle_index].read().unwrap().title);
-            buf.clear();
-            if stdin.read_line(&mut buf).unwrap_or(0) <= 1 {
-                println!("invalid index");
-                continue;
-            };
-
-            let pa_source_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
-
-            if pa_source_index >= pa_sources_json.len() {
-                println!("invalid index");
-                continue;
+            match comm {
+                Ok(v) => handles[handle_index].write().unwrap().actions.push(std::boxed::Box::new(v)),
+                Err(e) => println!("Failed to set action: {}", e),
             }
-
-            let mut comm = std::process::Command::new("sh");
-            comm.args([
-                "-c",
-                format!("pactl move-source-output {} {}", loopback_id, pa_sources_json[pa_source_index].index.to_string().as_str()).as_str(),
-            ]);
-
-            handles[handle_index].write().unwrap().actions.push(std::boxed::Box::new(CommandAction::new(comm)));
         }
-
-        println!("\n");
     }
 
     println!("setup complete");

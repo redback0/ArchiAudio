@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::Action;
 
-pub struct CommandAction {
+pub struct PactlAction {
     comm: std::process::Command,
 }
 
-pub struct CommandActionGenerator {
+pub struct PactlActionGenerator {
     loopback_id: String,
     pa_sources: Vec<PaSource>,
 }
@@ -17,7 +17,7 @@ struct PaSource {
     name: String,
 }
 
-impl CommandActionGenerator {
+impl PactlActionGenerator {
     pub fn new() -> Self {
         // absolute bs of a command, will be replaced with pipewire crate later
         let loopback_id_raw = std::process::Command::new("sh")
@@ -51,7 +51,7 @@ impl CommandActionGenerator {
     }
 
 
-    pub fn build_action(&self) -> Result<CommandAction, String> {
+    pub fn build_action(&self) -> Result<PactlAction, String> {
         let stdin = std::io::stdin();
         let mut buf = std::string::String::new();
 
@@ -78,11 +78,11 @@ impl CommandActionGenerator {
             format!("pactl move-source-output {} {}", self.loopback_id, self.pa_sources[pa_source_index].index).as_str(),
         ]);
 
-        Ok(CommandAction { comm: comm })
+        Ok(PactlAction { comm: comm })
     }
 }
 
-impl Action for CommandAction {
+impl Action for PactlAction {
     fn trigger(&mut self) -> Result<(), String> {
         match self.comm.spawn() {
             Ok(_) => Ok(()),

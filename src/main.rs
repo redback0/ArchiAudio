@@ -4,8 +4,8 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1 as top_level_handle
 };
 
-mod command_action;
-use crate::command_action::CommandActionGenerator;
+mod pactl_action;
+use crate::pactl_action::PactlActionGenerator;
 
 pub trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
@@ -109,7 +109,7 @@ fn main() {
     // create scope to avoid calling .read().unwrap() constantly
     {
         let handles = handles_lock.read().unwrap();
-        let command_action_generator = CommandActionGenerator::new();
+        let command_action_generator = PactlActionGenerator::new();
 
         loop {
             handles.iter().enumerate().for_each(|(i, handle)| {

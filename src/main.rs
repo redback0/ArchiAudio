@@ -2,10 +2,27 @@ use serde::{Deserialize, Serialize};
 use wayland_client::{Connection, Dispatch, Proxy, event_created_child, globals};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{zwlr_foreign_toplevel_manager_v1 as top_level_manager, zwlr_foreign_toplevel_handle_v1 as top_level_handle};
 
+trait Action {
+    fn trigger(&mut self) -> Result<(), String>;
+}
+
+struct CommandAction {
+    comm: std::process::Command,
+}
+
+impl Action for CommandAction {
+    fn trigger(&mut self) -> Result<(), String> {
+        match self.comm.spawn() {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to run command: {}", e)),
+        }
+    }
+}
+
 struct AppData;
 struct HandleActions {
     title: String,
-    comm: Option<std::process::Command>,
+    actions: Vec<std::boxed::Box<CommandAction>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,7 +72,7 @@ impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for Ap
         top_level_manager::EVT_TOPLEVEL_OPCODE => (top_level_handle::ZwlrForeignToplevelHandleV1,
             std::sync::Arc::new(HandleActions {
                 title: String::new(),
-                comm: None,
+                actions: vec!(),
             }.into())),
     ]);
 }
@@ -77,10 +94,12 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
             if state.contains(&2) {
                 let mut handle_data = handle_data_lock.write().unwrap();
                 println!("Active: {}", handle_data.title);
-                // handle audio swap here
-                if let Some(comm) = handle_data.comm.as_mut() {
-                    println!("{} {:?}", comm.get_program().to_str().unwrap(), comm.get_args());
-                    let _ = comm.spawn();
+
+                for action in &mut handle_data.actions {
+                    match action.trigger() {
+                        Ok(_) => {},
+                        Err(e) => println!("Action failed: {}", e),
+                    }
                 }
             }
         }
@@ -185,7 +204,7 @@ fn main() {
                 format!("pactl move-source-output {} {}", loopback_id, pa_sources_json[pa_source_index].index.to_string().as_str()).as_str(),
             ]);
 
-            handles[handle_index].write().unwrap().comm = Some(comm);
+            handles[handle_index].write().unwrap().actions.push(std::boxed::Box::new(CommandAction{ comm: comm }));
         }
 
         println!("\n");

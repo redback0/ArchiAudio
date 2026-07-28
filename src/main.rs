@@ -1,3 +1,4 @@
+use Box;
 use wayland_client::{Connection, Dispatch, Proxy};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_manager_v1 as top_level_manager,
@@ -11,10 +12,17 @@ pub trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
 }
 
+pub trait ActionGenerator<T>: where T: Action + ?Sized {
+    fn build_action(&self) -> Result<Box<T>, String>;
+    fn get_action_name(&self) -> String;
+}
+
 struct AppData;
 struct TLHandleActions {
     title: String,
-    actions: Vec<std::boxed::Box<dyn Action>>,
+    curr_active: bool,
+    active_actions: Vec<Box<dyn Action>>,
+    deactive_actions: Vec<Box<dyn Action>>,
 }
 
 type HandleWrapper = std::sync::Arc<std::sync::RwLock<TLHandleActions>>;
@@ -58,7 +66,9 @@ impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for Ap
         top_level_manager::EVT_TOPLEVEL_OPCODE => (top_level_handle::ZwlrForeignToplevelHandleV1,
             std::sync::Arc::new(TLHandleActions {
                 title: String::new(),
-                actions: vec!(),
+                curr_active: false,
+                active_actions: vec!(),
+                deactive_actions: vec!(),
             }.into())),
     ]);
 }
@@ -77,11 +87,23 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
             handle_data.title = title;
         }
         else if let top_level_handle::Event::State { state } = event {
-            if state.contains(&2) {
-                let mut handle_data = handle_data_lock.write().unwrap();
+            let mut handle_data = handle_data_lock.write().unwrap();
+
+            if !handle_data.curr_active && state.contains(&2) { // unable to use State enum directly
+                handle_data.curr_active = true;
                 println!("Active: {}", handle_data.title);
 
-                for action in &mut handle_data.actions {
+                for action in &mut handle_data.active_actions {
+                    match action.trigger() {
+                        Ok(_) => {},
+                        Err(e) => println!("Action failed: {}", e),
+                    }
+                }
+            } else if handle_data.curr_active && !state.contains(&2) {
+                handle_data.curr_active = false;
+                println!("Deactive: {}", handle_data.title);
+
+                for action in &mut handle_data.deactive_actions {
                     match action.trigger() {
                         Ok(_) => {},
                         Err(e) => println!("Action failed: {}", e),
@@ -109,7 +131,8 @@ fn main() {
     // create scope to avoid calling .read().unwrap() constantly
     {
         let handles = handles_lock.read().unwrap();
-        let command_action_generator = PactlActionGenerator::new();
+        let mut generators: Vec<Box<dyn ActionGenerator<dyn Action>>> = vec!();
+        generators.push(Box::new(PactlActionGenerator::new()));
 
         loop {
             handles.iter().enumerate().for_each(|(i, handle)| {
@@ -121,8 +144,6 @@ fn main() {
 
             let handle_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
 
-            println!("{}", handle_index);
-
             if handle_index >= handles.len() {
                 println!("invalid index");
                 continue;
@@ -130,10 +151,28 @@ fn main() {
 
             println!("\n");
 
-            let comm = command_action_generator.build_action();
+            generators.iter().enumerate().for_each(|(i, generator)| {
+                println!("[{}] {}", i, generator.get_action_name())
+            });
+
+            buf.clear();
+            if stdin.read_line(&mut buf).unwrap_or(0) <= 1 {
+                println!("invalid index");
+            };
+
+            let generator_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
+
+            if generator_index >= generators.len() {
+                println!("invalid index");
+                continue;
+            }
+
+            let generator = generators[generator_index].as_ref();
+
+            let comm = generator.build_action();
 
             match comm {
-                Ok(v) => handles[handle_index].write().unwrap().actions.push(std::boxed::Box::new(v)),
+                Ok(v) => handles[handle_index].write().unwrap().active_actions.push(v),
                 Err(e) => println!("Failed to set action: {}", e),
             }
         }
@@ -141,20 +180,7 @@ fn main() {
 
     println!("setup complete");
 
-    // start thread for wayland events
-    // let (tx, rx) = std::sync::mpsc::channel();
-
-    std::thread::spawn(move || {
-        loop {
-            event_queue.blocking_dispatch(&mut AppData).unwrap();
-        }
-    });
-
-
     loop {
-        if stdin.read_line(&mut buf).unwrap_or(0) > 0 && buf.trim() == "exit" { break };
+        event_queue.blocking_dispatch(&mut AppData).unwrap();
     }
-
-    // println!("exiting...");
-    // let _ = tx.send(());
 }

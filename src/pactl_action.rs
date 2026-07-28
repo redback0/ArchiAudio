@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Action;
+use crate::ActionGenerator;
 
 pub struct PactlAction {
     comm: std::process::Command,
@@ -17,6 +18,15 @@ struct PaSource {
     name: String,
 }
 
+impl Action for PactlAction {
+    fn trigger(&mut self) -> Result<(), String> {
+        match self.comm.spawn() {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to run command: {}", e)),
+        }
+    }
+}
+
 impl PactlActionGenerator {
     pub fn new() -> Self {
         // absolute bs of a command, will be replaced with pipewire crate later
@@ -29,7 +39,7 @@ impl PactlActionGenerator {
 
         let loopback_id = match str::from_utf8(&loopback_id_raw) {
             Ok(v) => v.trim(),
-            Err(e) => panic!("wtf happened: {}", e),
+            Err(e) => panic!("Command output failed to interpret as str: {}", e),
         };
         assert!(loopback_id.len() > 0);
 
@@ -49,12 +59,12 @@ impl PactlActionGenerator {
 
         Self{loopback_id: loopback_id.to_string(), pa_sources: pa_sources_json}
     }
+}
 
-
-    pub fn build_action(&self) -> Result<PactlAction, String> {
+impl ActionGenerator<dyn Action> for PactlActionGenerator {
+    fn build_action(&self) -> Result<Box<dyn Action>, String> {
         let stdin = std::io::stdin();
         let mut buf = std::string::String::new();
-
 
         self.pa_sources.iter().enumerate().for_each(|(i, pa_source)| {
             println!("[{}] {}", i, pa_source.name)
@@ -78,15 +88,10 @@ impl PactlActionGenerator {
             format!("pactl move-source-output {} {}", self.loopback_id, self.pa_sources[pa_source_index].index).as_str(),
         ]);
 
-        Ok(PactlAction { comm: comm })
+        Ok(Box::new(PactlAction { comm: comm }))
     }
-}
 
-impl Action for PactlAction {
-    fn trigger(&mut self) -> Result<(), String> {
-        match self.comm.spawn() {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed to run command: {}", e)),
-        }
+    fn get_action_name(&self) -> String {
+        "pactl move source".to_string()
     }
 }

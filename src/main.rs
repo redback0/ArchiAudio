@@ -53,6 +53,8 @@ impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for Ap
         if let top_level_manager::Event::Toplevel { toplevel } = event {
             let user_data: Option<&HandleWrapper> = toplevel.data();
 
+            println!("New window");
+
             match user_data {
                 Some(handle_data) => {
                     data.write().unwrap().push(handle_data.clone());
@@ -114,7 +116,60 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
     }
 }
 
+fn create_actions(handles_lock: &HandleVec, generators: &Vec<Box<dyn ActionGenerator<dyn Action>>>) {
+    let handles = handles_lock.read().unwrap();
+    let stdin = std::io::stdin();
+    let mut buf = String::new();
+
+    loop {
+        handles.iter().enumerate().for_each(|(i, handle)| {
+            println!("[{}] {}", i, handle.read().unwrap().title)
+        });
+        println!("\nWhich window would you like to have swap? (leave empty to skip)");
+        buf.clear();
+        if stdin.read_line(&mut buf).unwrap_or(0) <= 1 { break };
+
+        let handle_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
+
+        if handle_index >= handles.len() {
+            println!("invalid index");
+            continue;
+        }
+
+        println!("\n");
+
+        generators.iter().enumerate().for_each(|(i, generator)| {
+            println!("[{}] {}", i, generator.get_action_name())
+        });
+
+        buf.clear();
+        if stdin.read_line(&mut buf).unwrap_or(0) <= 1 {
+            println!("invalid index");
+            continue;
+        };
+
+        let generator_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
+
+        if generator_index >= generators.len() {
+            println!("invalid index");
+            continue;
+        }
+
+        let generator = generators[generator_index].as_ref();
+
+        let comm = generator.build_action();
+
+        match comm {
+            Ok(v) => handles[handle_index].write().unwrap().active_actions.push(v),
+            Err(e) => println!("Failed to set action: {}", e),
+        }
+    }
+}
+
 fn main() {
+    let mut generators: Vec<Box<dyn ActionGenerator<dyn Action>>> = vec!();
+    generators.push(Box::new(PactlActionGenerator::new()));
+
     let handles_lock = HandleVec::new(std::sync::RwLock::new(vec![]));
 
     let conn: Connection = Connection::connect_to_env().unwrap();
@@ -124,63 +179,31 @@ fn main() {
 
     event_queue.roundtrip(&mut AppData).unwrap();
 
-    // ask the user what toplevels to associate with what pa sources
-    let stdin = std::io::stdin();
-    let mut buf = String::new();
-
-    // create scope to avoid calling .read().unwrap() constantly
-    {
-        let handles = handles_lock.read().unwrap();
-        let mut generators: Vec<Box<dyn ActionGenerator<dyn Action>>> = vec!();
-        generators.push(Box::new(PactlActionGenerator::new()));
-
-        loop {
-            handles.iter().enumerate().for_each(|(i, handle)| {
-                println!("[{}] {}", i, handle.read().unwrap().title)
-            });
-            println!("\nWhich window would you like to have swap? (leave empty to skip)");
-            buf.clear();
-            if stdin.read_line(&mut buf).unwrap_or(0) <= 1 { break };
-
-            let handle_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
-
-            if handle_index >= handles.len() {
-                println!("invalid index");
-                continue;
-            }
-
-            println!("\n");
-
-            generators.iter().enumerate().for_each(|(i, generator)| {
-                println!("[{}] {}", i, generator.get_action_name())
-            });
-
-            buf.clear();
-            if stdin.read_line(&mut buf).unwrap_or(0) <= 1 {
-                println!("invalid index");
-            };
-
-            let generator_index = buf.trim().parse::<usize>().unwrap_or(usize::MAX);
-
-            if generator_index >= generators.len() {
-                println!("invalid index");
-                continue;
-            }
-
-            let generator = generators[generator_index].as_ref();
-
-            let comm = generator.build_action();
-
-            match comm {
-                Ok(v) => handles[handle_index].write().unwrap().active_actions.push(v),
-                Err(e) => println!("Failed to set action: {}", e),
-            }
-        }
-    }
+    create_actions(&handles_lock, &generators);
 
     println!("setup complete");
 
+    std::thread::spawn(move || {
+        loop {
+            event_queue.blocking_dispatch(&mut AppData).unwrap();
+        }
+    });
+
+    let stdin = std::io::stdin();
+    let mut buf = std::string::String::new();
+
     loop {
-        event_queue.blocking_dispatch(&mut AppData).unwrap();
+        buf.clear();
+        match stdin.read_line(&mut buf) {
+            Ok(_) => {
+                let input = buf.trim();
+                match input {
+                    "exit" => println!("ctrl+c to exit"),
+                    "addactions" => create_actions(&handles_lock, &generators),
+                    _ => println!("Unknown command"),
+                }
+            }
+            Err(_) => {}
+        }
     }
 }

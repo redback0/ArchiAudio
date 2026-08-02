@@ -28,6 +28,11 @@ struct TLHandleActions {
 type HandleWrapper = std::sync::Arc<std::sync::RwLock<TLHandleActions>>;
 type HandleVec = std::sync::Arc<std::sync::RwLock<Vec<HandleWrapper>>>;
 
+enum ChannelMessage {
+    _CONTINUE,
+    EXIT,
+}
+
 impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for AppData {
     fn event(
         _: &mut Self,
@@ -183,9 +188,24 @@ fn main() {
 
     println!("setup complete");
 
+    let (tc, rc) = std::sync::mpsc::channel();
+
     std::thread::spawn(move || {
         loop {
-            event_queue.blocking_dispatch(&mut AppData).unwrap();
+            let read_lock = event_queue.prepare_read().unwrap();
+
+            match read_lock.read() {
+                Ok(_) => {
+                    let _ = event_queue.dispatch_pending(&mut AppData);
+                }
+                Err(_) => {}
+            }
+            match rc.try_recv() {
+                Ok(ChannelMessage::EXIT) | Err(std::sync::mpsc::TryRecvError::Disconnected)
+                    => return,
+                Ok(_) | Err(_) => {}, 
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     });
 
@@ -198,8 +218,12 @@ fn main() {
             Ok(_) => {
                 let input = buf.trim();
                 match input {
-                    "exit" => println!("ctrl+c to exit"),
+                    "exit" => {
+                        tc.send(ChannelMessage::EXIT).unwrap();
+                        return
+                    },
                     "addactions" => create_actions(&handles_lock, &generators),
+                    "" => {},
                     _ => println!("Unknown command"),
                 }
             }

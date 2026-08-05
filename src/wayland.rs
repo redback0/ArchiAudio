@@ -1,6 +1,5 @@
-use std::vec;
+use std::{sync::{Arc, RwLock}, vec};
 
-use Box;
 use wayland_client::{Connection, Dispatch, Proxy};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_manager_v1 as top_level_manager,
@@ -8,23 +7,23 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 };
 use iced;
 
-use crate::{Action, IcedMessage};
+use crate::{Action, ActionGenerator, IcedMessage, IcedState};
 
 pub struct Wayland {
     _tc: std::sync::mpsc::Sender<ChannelMessage>,
-    _handles_lock: HandleVec,
+    handles_lock: HandleVec,
 }
 
 struct AppData;
-struct TLHandleActions {
+pub struct TLHandleActions {
     title: String,
     id: String,
     curr_active: bool,
-    active_actions: Vec<Box<dyn Action>>,
-    deactive_actions: Vec<Box<dyn Action>>,
+    active_actions: Vec<Arc<RwLock<dyn Action>>>,
+    deactive_actions: Vec<Arc<RwLock<dyn Action>>>,
 }
 
-type HandleWrapper = std::sync::Arc<std::sync::RwLock<TLHandleActions>>;
+pub type HandleWrapper = std::sync::Arc<std::sync::RwLock<TLHandleActions>>;
 type HandleVec = std::sync::Arc<std::sync::RwLock<Vec<HandleWrapper>>>;
 
 enum ChannelMessage {
@@ -32,16 +31,48 @@ enum ChannelMessage {
     _EXIT,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum WLIcedMessage {
+    ChangeActionType(Arc<dyn ActionGenerator<dyn Action>>, HandleWrapper),
 }
 
 impl Wayland {
-    pub fn view(&self) -> iced::Element<'_, IcedMessage>{
-        iced::widget::text("hello").into()
+    pub fn view<'a>(&'a self, state: &'a IcedState) -> iced::Element<'_, IcedMessage>{
+        let mut column = iced::widget::column![];
+        
+        let handles = self.handles_lock.read().unwrap();
+
+        for handle_lock in handles.iter() {
+            let handle = handle_lock.read().unwrap();
+            let mut row = iced::widget::row![];
+
+            row = row.push(iced::widget::text!("{}", handle.title));
+            let mut act_col = iced::widget::column![];
+            for action_lock in handle.active_actions.clone() {
+                let move_action_lock = handle_lock.clone();
+                let action = action_lock.read().unwrap();
+                act_col = act_col.push(iced::widget::combo_box(
+                    &state.generators,
+                    "Pick an action",
+                    Some(&action.get_generator()),
+                    move |v| IcedMessage::Wayland(WLIcedMessage::ChangeActionType(v, move_action_lock.clone()))
+                ));
+            }
+            let move_action_lock = handle_lock.clone();
+            act_col = act_col.push(iced::widget::combo_box(
+                &state.generators,
+                "Pick an action",
+                None,
+                move |v| IcedMessage::Wayland(WLIcedMessage::ChangeActionType(v, move_action_lock.clone()))
+            ));
+            row = row.push(act_col);
+            column = column.push(row);
+        }
+
+        column.into()
     }
 
-    pub fn update(&self, message: WLIcedMessage) {
+    pub fn update(&self, _message: WLIcedMessage) {
 
     }
 }
@@ -76,7 +107,7 @@ impl Default for Wayland {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         });
-        Self{_tc: tc, _handles_lock: handles_lock}
+        Self{_tc: tc, handles_lock}
     }
 }
 
@@ -152,7 +183,8 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
                     handle_data.curr_active = true;
                     println!("Active: {}", handle_data.title);
 
-                    for action in &mut handle_data.active_actions {
+                    for action_lock in &mut handle_data.active_actions {
+                        let mut action = action_lock.write().unwrap();
                         match action.trigger() {
                             Ok(_) => {},
                             Err(e) => println!("Action failed: {}", e),
@@ -162,7 +194,8 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
                     handle_data.curr_active = false;
                     println!("Deactive: {}", handle_data.title);
 
-                    for action in &mut handle_data.deactive_actions {
+                    for action_lock in &mut handle_data.deactive_actions {
+                        let mut action = action_lock.write().unwrap();
                         match action.trigger() {
                             Ok(_) => {},
                             Err(e) => println!("Action failed: {}", e),

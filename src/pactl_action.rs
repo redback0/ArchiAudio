@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Action;
@@ -5,6 +7,7 @@ use crate::ActionGenerator;
 
 pub struct PactlAction {
     comm: std::process::Command,
+    generator: Arc<PactlActionGenerator>,
 }
 
 pub struct PactlActionGenerator {
@@ -24,6 +27,14 @@ impl Action for PactlAction {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Failed to run command: {}", e)),
         }
+    }
+
+    fn action_type(&self) -> String {
+        "Pactl Action".to_string()
+    }
+    
+    fn get_generator(&self) -> Arc<dyn ActionGenerator<dyn Action>> {
+        self.generator.clone()
     }
 }
 
@@ -61,8 +72,14 @@ impl PactlActionGenerator {
     }
 }
 
+impl std::fmt::Display for PactlActionGenerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Pactl Action")
+    }
+}
+
 impl ActionGenerator<dyn Action> for PactlActionGenerator {
-    fn build_action(&self) -> Result<Box<dyn Action>, String> {
+    fn build_action(self: Arc<PactlActionGenerator>) -> Result<Box<dyn Action>, String> {
         let stdin = std::io::stdin();
         let mut buf = std::string::String::new();
 
@@ -88,7 +105,7 @@ impl ActionGenerator<dyn Action> for PactlActionGenerator {
             format!("pactl move-source-output {} {}", self.loopback_id, self.pa_sources[pa_source_index].index).as_str(),
         ]);
 
-        Ok(Box::new(PactlAction { comm: comm }))
+        Ok(Box::new(PactlAction { comm: comm, generator: self.clone() }))
     }
 
     fn get_action_name(&self) -> String {

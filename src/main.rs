@@ -1,4 +1,6 @@
 
+use std::sync::Arc;
+
 use iced;
 
 mod wayland;
@@ -10,79 +12,48 @@ use crate::pactl_action::PactlActionGenerator;
 
 pub trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
+    fn action_type(&self) -> String;
+    fn get_generator(&self) -> Arc<dyn ActionGenerator<dyn Action>>;
 }
 
-pub trait ActionGenerator<T>: where T: Action + ?Sized {
-    fn build_action(&self) -> Result<Box<T>, String>;
+pub trait ActionGenerator<T>: std::fmt::Display + Send + Sync where T: Action + ?Sized {
+    fn build_action(self: Arc<Self>) -> Result<Box<T>, String>;
     fn get_action_name(&self) -> String;
 }
 
 struct IcedState {
-    selections: iced::widget::combo_box::State<IcedSelectBox>,
-    selection: Option<IcedSelectBox>,
+    generators: iced::widget::combo_box::State<Arc<dyn ActionGenerator<dyn Action>>>,
     wayland: Wayland,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum IcedMessage {
-    SELECTBOX(IcedSelectBox),
-    WAYLAND(WLIcedMessage),
-}
-
-#[derive(Debug, Clone)]
-enum IcedSelectBox {
-    A,
-    B,
-    C,
+    Wayland(WLIcedMessage),
 }
 
 impl Default for IcedState {
     fn default() -> Self {
-        let mut s = Self {
-            selections: iced::widget::combo_box::State::<IcedSelectBox>::default(),
-            selection: None,
+        let s = Self {
+            generators: iced::widget::combo_box::State::new(vec![
+                Arc::new(PactlActionGenerator::new()),
+            ]),
             wayland: Wayland::default(),
         };
-        s.selections.push(IcedSelectBox::A);
-        s.selections.push(IcedSelectBox::B);
-        s.selections.push(IcedSelectBox::C);
-
         s
-    }
-}
-
-impl std::fmt::Display for IcedSelectBox {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::A => "a thing",
-            Self::B => "b nother thing",
-            Self::C => "c gain",
-        })
     }
 }
 
 fn iced_update(state: &mut IcedState, message: IcedMessage) {
     match message {
-        IcedMessage::SELECTBOX(v) => {
-            println!("{}", v);
-            state.selection = Some(v);
-        }
+        IcedMessage::Wayland(v) => state.wayland.update(v),
     }
 }
 
 fn iced_view(state: &IcedState) -> iced::Element<'_, IcedMessage> {
-    println!("{:?}", state.selections);
-    iced::widget::combo_box(
-        &state.selections,
-        "select action",
-        state.selection.as_ref(),
-        IcedMessage::SELECTBOX
-    ).into()
+    state.wayland.view(state)
 }
 
 fn main() -> iced::Result {
-    let mut generators: Vec<Box<dyn ActionGenerator<dyn Action>>> = vec!();
-    generators.push(Box::new(PactlActionGenerator::new()));
 
     iced::run(iced_update, iced_view)
 }

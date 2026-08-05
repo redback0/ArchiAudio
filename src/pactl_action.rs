@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -79,7 +80,7 @@ impl std::fmt::Display for PactlActionGenerator {
 }
 
 impl ActionGenerator<dyn Action> for PactlActionGenerator {
-    fn build_action(self: Arc<PactlActionGenerator>) -> Result<Box<dyn Action>, String> {
+    fn build_action(self: Arc<PactlActionGenerator>) -> Result<Arc<RwLock<dyn Action>>, String> {
         let stdin = std::io::stdin();
         let mut buf = std::string::String::new();
 
@@ -105,7 +106,7 @@ impl ActionGenerator<dyn Action> for PactlActionGenerator {
             format!("pactl move-source-output {} {}", self.loopback_id, self.pa_sources[pa_source_index].index).as_str(),
         ]);
 
-        Ok(Box::new(PactlAction { comm: comm, generator: self.clone() }))
+        Ok(Arc::new(RwLock::new(PactlAction { comm: comm, generator: self.clone() })))
     }
 
     fn get_action_name(&self) -> String {

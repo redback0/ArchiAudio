@@ -1,5 +1,5 @@
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use iced;
 
@@ -17,7 +17,7 @@ pub trait Action: Send + Sync {
 }
 
 pub trait ActionGenerator<T>: std::fmt::Display + Send + Sync where T: Action + ?Sized {
-    fn build_action(self: Arc<Self>) -> Result<Box<T>, String>;
+    fn build_action(self: Arc<Self>) -> Result<Arc<RwLock<T>>, String>;
     fn get_action_name(&self) -> String;
 }
 

@@ -33,11 +33,15 @@ enum ChannelMessage {
 
 #[derive(Clone)]
 pub enum WLIcedMessage {
-    ChangeActionType(Arc<dyn ActionGenerator<dyn Action>>, HandleWrapper),
+    ChangeActionType(
+        Arc<dyn ActionGenerator<dyn Action>>,
+        HandleWrapper,
+        Option<Arc<RwLock<dyn Action>>>
+    ),
 }
 
 impl Wayland {
-    pub fn view<'a>(&'a self, state: &'a IcedState) -> iced::Element<'_, IcedMessage>{
+    pub fn view<'a>(&'a self, state: &'a IcedState) -> iced::Element<'a, IcedMessage>{
         let mut column = iced::widget::column![];
         
         let handles = self.handles_lock.read().unwrap();
@@ -49,13 +53,20 @@ impl Wayland {
             row = row.push(iced::widget::text!("{}", handle.title));
             let mut act_col = iced::widget::column![];
             for action_lock in handle.active_actions.clone() {
-                let move_action_lock = handle_lock.clone();
+                let move_handle_lock = handle_lock.clone();
+                let move_action_lock = action_lock.clone();
                 let action = action_lock.read().unwrap();
                 act_col = act_col.push(iced::widget::combo_box(
                     &state.generators,
                     "Pick an action",
                     Some(&action.get_generator()),
-                    move |v| IcedMessage::Wayland(WLIcedMessage::ChangeActionType(v, move_action_lock.clone()))
+                    move |v| IcedMessage::Wayland(
+                        WLIcedMessage::ChangeActionType(
+                            v,
+                            move_handle_lock.clone(),
+                            Some(move_action_lock.clone())
+                        )
+                    )
                 ));
             }
             let move_action_lock = handle_lock.clone();
@@ -63,7 +74,13 @@ impl Wayland {
                 &state.generators,
                 "Pick an action",
                 None,
-                move |v| IcedMessage::Wayland(WLIcedMessage::ChangeActionType(v, move_action_lock.clone()))
+                move |v| IcedMessage::Wayland(
+                    WLIcedMessage::ChangeActionType(
+                        v,
+                        move_action_lock.clone(),
+                        None
+                    )
+                )
             ));
             row = row.push(act_col);
             column = column.push(row);
@@ -72,8 +89,35 @@ impl Wayland {
         column.into()
     }
 
-    pub fn update(&self, _message: WLIcedMessage) {
+    pub fn update(&self, message: WLIcedMessage) {
+        match message {
+            WLIcedMessage::ChangeActionType(gener, handle_lock, action_lock_option) => {
+                match action_lock_option {
+                    Some(action_lock) => {
+                        let action = action_lock.read().unwrap();
 
+                        if Arc::ptr_eq(&gener, &action.get_generator()) {
+                            return    
+                        }
+                        let mut handle = handle_lock.write().unwrap();
+
+                        match handle.active_actions
+                        .iter()
+                        .position(|old_action|
+                            Arc::ptr_eq(old_action, &action_lock)
+                        ) {
+                            Some(index) => handle.active_actions[index] = gener.build_action().unwrap(),
+                            _ => {}
+                        }
+                    }
+                    None => {
+                        let mut handle = handle_lock.write().unwrap();
+
+                        handle.active_actions.push(gener.build_action().unwrap());
+                    }
+                }
+            }
+        }
     }
 }
 

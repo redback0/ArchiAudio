@@ -33,10 +33,14 @@ enum ChannelMessage {
 
 #[derive(Clone)]
 pub enum WLIcedMessage {
-    ChangeActionType(
+    ChangeActiveActionType(
         Arc<dyn ActionGenerator<dyn Action>>,
         HandleWrapper,
         Option<Arc<RwLock<dyn Action>>>
+    ),
+    RemoveAction(
+        HandleWrapper,
+        Arc<RwLock<dyn Action>>,
     ),
 }
 
@@ -50,38 +54,42 @@ impl Wayland {
             let handle = handle_lock.read().unwrap();
             let mut row = iced::widget::row![];
 
-            row = row.push(iced::widget::text!("{}", handle.title));
+            row = row.push(iced::widget::text!("{}", handle.title).width(500));
             let mut act_col = iced::widget::column![];
             for action_lock in handle.active_actions.clone() {
                 let move_handle_lock = handle_lock.clone();
                 let move_action_lock = action_lock.clone();
                 let action = action_lock.read().unwrap();
-                act_col = act_col.push(iced::widget::combo_box(
-                    &state.generators,
-                    "Pick an action",
-                    Some(&action.get_generator()),
-                    move |v| IcedMessage::Wayland(
-                        WLIcedMessage::ChangeActionType(
-                            v,
-                            move_handle_lock.clone(),
-                            Some(move_action_lock.clone())
+                let act_row = iced::widget::row![
+                    iced::widget::combo_box(
+                        &state.generators,
+                        "Pick an action",
+                        Some(&action.get_generator()),
+                        move |generator| IcedMessage::Wayland(
+                            WLIcedMessage::ChangeActiveActionType(
+                                generator,
+                                move_handle_lock.clone(),
+                                Some(move_action_lock.clone())
+                            )
                         )
-                    )
-                ));
+                    ).width(170),
+                    iced::widget::button("X").on_press(IcedMessage::Wayland(WLIcedMessage::RemoveAction(handle_lock.clone(), action_lock.clone())))
+                ];
+                act_col = act_col.push(act_row);
             }
             let move_action_lock = handle_lock.clone();
             act_col = act_col.push(iced::widget::combo_box(
                 &state.generators,
                 "Pick an action",
                 None,
-                move |v| IcedMessage::Wayland(
-                    WLIcedMessage::ChangeActionType(
-                        v,
+                move |generator| IcedMessage::Wayland(
+                    WLIcedMessage::ChangeActiveActionType(
+                        generator,
                         move_action_lock.clone(),
                         None
                     )
                 )
-            ));
+            )).width(200);
             row = row.push(act_col);
             column = column.push(row);
         }
@@ -91,7 +99,7 @@ impl Wayland {
 
     pub fn update(&self, message: WLIcedMessage) {
         match message {
-            WLIcedMessage::ChangeActionType(gener, handle_lock, action_lock_option) => {
+            WLIcedMessage::ChangeActiveActionType(gener, handle_lock, action_lock_option) => {
                 match action_lock_option {
                     Some(action_lock) => {
                         let action = action_lock.read().unwrap();
@@ -115,6 +123,18 @@ impl Wayland {
 
                         handle.active_actions.push(gener.build_action().unwrap());
                     }
+                }
+            }
+            WLIcedMessage::RemoveAction(handle_lock, action_lock) => {
+                let mut handle = handle_lock.write().unwrap();
+
+                match handle.active_actions
+                .iter()
+                .position(|old_action|
+                    Arc::ptr_eq(old_action, &action_lock)
+                ) {
+                    Some(index) => _ = handle.active_actions.remove(index),
+                    _ => {}
                 }
             }
         }

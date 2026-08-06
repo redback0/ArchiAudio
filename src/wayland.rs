@@ -14,7 +14,10 @@ pub struct Wayland {
     handles_lock: HandleVec,
 }
 
-struct AppData;
+struct WaylandInternal {
+    handles_lock: HandleVec,
+}
+
 pub struct TLHandleActions {
     title: String,
     id: String,
@@ -23,8 +26,8 @@ pub struct TLHandleActions {
     deactive_actions: Vec<Arc<RwLock<dyn Action>>>,
 }
 
-pub type HandleWrapper = std::sync::Arc<std::sync::RwLock<TLHandleActions>>;
-type HandleVec = std::sync::Arc<std::sync::RwLock<Vec<HandleWrapper>>>;
+pub type HandleWrapper = Arc<RwLock<TLHandleActions>>;
+type HandleVec = Arc<RwLock<Vec<HandleWrapper>>>;
 
 enum ChannelMessage {
     _CONTINUE,
@@ -145,11 +148,12 @@ impl Default for Wayland {
     fn default() -> Self {
         let handles_lock = HandleVec::new(std::sync::RwLock::new(vec![]));
         let conn: Connection = Connection::connect_to_env().unwrap();
-        let (globals, mut event_queue) = wayland_client::globals::registry_queue_init::<AppData>(&conn).unwrap();
+        let (globals, mut event_queue) = wayland_client::globals::registry_queue_init::<WaylandInternal>(&conn).unwrap();
 
         let _toplevel_manager: top_level_manager::ZwlrForeignToplevelManagerV1 = globals.bind(&event_queue.handle(), 3..=3, handles_lock.clone()).unwrap();
 
-        event_queue.roundtrip(&mut AppData).unwrap();
+        let mut wl = WaylandInternal{handles_lock: handles_lock.clone()};
+        event_queue.roundtrip(&mut wl).unwrap();
 
         let (tc, rc) = std::sync::mpsc::channel();
 
@@ -159,7 +163,7 @@ impl Default for Wayland {
 
                 match read_lock.read() {
                     Ok(_) => {
-                        let _ = event_queue.dispatch_pending(&mut AppData);
+                        let _ = event_queue.dispatch_pending(&mut wl);
                     }
                     Err(_) => {}
                 }
@@ -175,41 +179,44 @@ impl Default for Wayland {
     }
 }
 
-impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for AppData {
+impl Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for WaylandInternal {
     fn event(
         _: &mut Self,
         _: &wayland_client::protocol::wl_registry::WlRegistry,
         _event: wayland_client::protocol::wl_registry::Event,
         _data: &wayland_client::globals::GlobalListContents,
         _: &wayland_client::Connection,
-        _: &wayland_client::QueueHandle<AppData>,
+        _: &wayland_client::QueueHandle<WaylandInternal>,
     ) {
         // purposely empty
     }
 }
 
-impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for AppData {
+impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for WaylandInternal {
     fn event(
         _: &mut Self,
         _: &top_level_manager::ZwlrForeignToplevelManagerV1,
         event: <top_level_manager::ZwlrForeignToplevelManagerV1 as wayland_client::Proxy>::Event,
-        data: &HandleVec,
+        handles_lock: &HandleVec,
         _: &wayland_client::Connection,
         _: &wayland_client::QueueHandle<Self>,
     ) {
-        if let top_level_manager::Event::Toplevel { toplevel } = event {
-            let user_data: Option<&HandleWrapper> = toplevel.data();
+        match event {
+            top_level_manager::Event::Toplevel{toplevel} => {
+                let user_data: Option<&HandleWrapper> = toplevel.data();
 
-            match user_data {
-                Some(handle_data) => {
-                    data.write().unwrap().push(handle_data.clone());
-                },
-                None => panic!("Failed to get user data from toplevel handle"),
+                match user_data {
+                    Some(handle_data) => {
+                        handles_lock.write().unwrap().push(handle_data.clone());
+                    },
+                    None => panic!("Failed to get user data from toplevel handle"),
+                }
             }
+            _ => {}
         }
     }
 
-    wayland_client::event_created_child!(AppData, top_level_manager::ZwlrForeignToplevelManagerV1, [
+    wayland_client::event_created_child!(WaylandInternal, top_level_manager::ZwlrForeignToplevelManagerV1, [
         top_level_manager::EVT_TOPLEVEL_OPCODE => (top_level_handle::ZwlrForeignToplevelHandleV1,
             std::sync::Arc::new(TLHandleActions {
                 title: String::new(),
@@ -221,9 +228,9 @@ impl Dispatch<top_level_manager::ZwlrForeignToplevelManagerV1, HandleVec> for Ap
     ]);
 }
 
-impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for AppData {
+impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for WaylandInternal {
     fn event(
-        _: &mut Self,
+        wl_state: &mut Self,
         _: &top_level_handle::ZwlrForeignToplevelHandleV1,
         event: <top_level_handle::ZwlrForeignToplevelHandleV1 as wayland_client::Proxy>::Event,
         handle_data_lock: &HandleWrapper,
@@ -267,6 +274,16 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
                     }
                 }
             },
+            top_level_handle::Event::Closed => {
+                let mut handles = wl_state.handles_lock.write().unwrap();
+
+                match handles.iter().position(
+                    |p| Arc::ptr_eq(handle_data_lock, p)
+                ) {
+                    Some(index) => _ = handles.remove(index),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }

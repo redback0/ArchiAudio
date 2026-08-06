@@ -7,7 +7,7 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 };
 use iced;
 
-use crate::{Action, ActionGenerator, IcedMessage, IcedState};
+use crate::{Action, GeneratorIndex, IcedMessage, IcedState};
 
 pub struct Wayland {
     _tc: std::sync::mpsc::Sender<ChannelMessage>,
@@ -37,7 +37,7 @@ enum ChannelMessage {
 #[derive(Clone)]
 pub enum WLIcedMessage {
     ChangeActiveActionType(
-        Arc<dyn ActionGenerator<dyn Action>>,
+        GeneratorIndex,
         HandleWrapper,
         Option<Arc<RwLock<dyn Action>>>
     ),
@@ -65,7 +65,7 @@ impl Wayland {
                 let action = action_lock.read().unwrap();
                 let act_row = iced::widget::row![
                     iced::widget::combo_box(
-                        &state.generators,
+                        &state.generators_state,
                         "Pick an action",
                         Some(&action.get_generator()),
                         move |generator| IcedMessage::Wayland(
@@ -76,13 +76,14 @@ impl Wayland {
                             )
                         )
                     ).width(170),
-                    iced::widget::button("X").on_press(IcedMessage::Wayland(WLIcedMessage::RemoveAction(handle_lock.clone(), action_lock.clone())))
+                    iced::widget::button("X").on_press(IcedMessage::Wayland(WLIcedMessage::RemoveAction(handle_lock.clone(), action_lock.clone()))),
+                    action.view(action_lock.clone(), &state.generators)
                 ];
                 act_col = act_col.push(act_row);
             }
             let move_action_lock = handle_lock.clone();
             act_col = act_col.push(iced::widget::combo_box(
-                &state.generators,
+                &state.generators_state,
                 "Pick an action",
                 None,
                 move |generator| IcedMessage::Wayland(
@@ -92,7 +93,7 @@ impl Wayland {
                         None
                     )
                 )
-            )).width(200);
+            ).width(200));
             row = row.push(act_col);
             column = column.push(row);
         }
@@ -100,16 +101,18 @@ impl Wayland {
         column.into()
     }
 
-    pub fn update(&self, message: WLIcedMessage) {
+    pub fn update(&self, state: &IcedState, message: WLIcedMessage) {
         match message {
-            WLIcedMessage::ChangeActiveActionType(gener, handle_lock, action_lock_option) => {
+            WLIcedMessage::ChangeActiveActionType(gener_idx, handle_lock, action_lock_option) => {
+                let gener = state.generators[gener_idx.index].clone();
                 match action_lock_option {
                     Some(action_lock) => {
                         let action = action_lock.read().unwrap();
 
-                        if Arc::ptr_eq(&gener, &action.get_generator()) {
-                            return    
+                        if gener_idx.index == action.get_generator().index {
+                            return
                         }
+
                         let mut handle = handle_lock.write().unwrap();
 
                         match handle.active_actions
@@ -117,14 +120,14 @@ impl Wayland {
                         .position(|old_action|
                             Arc::ptr_eq(old_action, &action_lock)
                         ) {
-                            Some(index) => handle.active_actions[index] = gener.build_action().unwrap(),
+                            Some(index) => handle.active_actions[index] = gener.build_action(gener_idx).unwrap(),
                             _ => {}
                         }
                     }
                     None => {
                         let mut handle = handle_lock.write().unwrap();
 
-                        handle.active_actions.push(gener.build_action().unwrap());
+                        handle.active_actions.push(gener.build_action(gener_idx).unwrap());
                     }
                 }
             }
@@ -252,7 +255,7 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
 
                 if !handle_data.curr_active && state.contains(&2) { // unable to use State enum directly
                     handle_data.curr_active = true;
-                    println!("Active: {}", handle_data.title);
+                    // println!("Active: {}", handle_data.title);
 
                     for action_lock in &mut handle_data.active_actions {
                         let mut action = action_lock.write().unwrap();
@@ -263,7 +266,7 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
                     }
                 } else if handle_data.curr_active && !state.contains(&2) {
                     handle_data.curr_active = false;
-                    println!("Deactive: {}", handle_data.title);
+                    // println!("Deactive: {}", handle_data.title);
 
                     for action_lock in &mut handle_data.deactive_actions {
                         let mut action = action_lock.write().unwrap();

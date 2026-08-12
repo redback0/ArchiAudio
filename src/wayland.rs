@@ -50,7 +50,7 @@ pub enum WLIcedMessage {
 impl Wayland {
     pub fn view<'a>(&'a self, state: &'a IcedState) -> iced::Element<'a, IcedMessage>{
         let mut column = iced::widget::column![];
-        
+
         let handles = self.handles_lock.read().unwrap();
 
         for handle_lock in handles.iter() {
@@ -173,7 +173,7 @@ impl Default for Wayland {
                 match rc.try_recv() {
                     Ok(ChannelMessage::_EXIT) | Err(std::sync::mpsc::TryRecvError::Disconnected)
                         => return,
-                    Ok(_) | Err(_) => {}, 
+                    Ok(_) | Err(_) => {},
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }

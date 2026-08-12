@@ -33,11 +33,11 @@ impl Action for PactlAction {
             Err(e) => Err(format!("Failed to run command: {}", e)),
         }
     }
-    
+
     fn get_generator(&self) -> GeneratorIndex {
         self.generator.clone()
     }
-    
+
     fn view<'a>(&self, self_lock: Arc<RwLock<dyn Action>>, generators: &'a Vec<Arc<dyn ActionGenerator<dyn Action>>>) -> iced::Element<'a, IcedMessage> {
         let move_self_lock = self_lock.clone();
         let action_data = self.source.clone();
@@ -54,7 +54,7 @@ impl Action for PactlAction {
             )
         ].width(200).into()
     }
-    
+
     fn update(&mut self, new_data: ActionDataID, generators: &Vec<Arc<dyn ActionGenerator<dyn Action>>>) {
         let gener: &PactlActionGenerator = generators[self.generator.index].as_any().downcast_ref().unwrap();
 
@@ -90,7 +90,7 @@ impl PactlActionGenerator {
                 "pactl -f json list sources",
             ])
             .output().expect("failed to get sources").stdout;
-        
+
         let pa_sources_s = match str::from_utf8(&pa_sources_raw) {
             Ok(v) => v,
             Err(e) => panic!("Unable to convert command output to string: {}", e),
@@ -131,7 +131,7 @@ impl ActionGenerator<dyn Action> for PactlActionGenerator {
     fn get_action_name(&self) -> String {
         "pactl move source".to_string()
     }
-    
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

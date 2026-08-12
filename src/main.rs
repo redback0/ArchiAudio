@@ -84,7 +84,7 @@ impl IcedState {
             IcedMessage::Wayland(v) => self.wayland.update(self, v),
         }
     }
-    
+
     fn view(&self) -> iced::Element<'_, IcedMessage> {
         self.wayland.view(self)
     }

@@ -1,3 +1,4 @@
+use iced::futures::SinkExt;
 use std::sync::{Arc, RwLock};
 
 use iced;
@@ -60,6 +61,7 @@ struct IcedState {
 pub enum IcedMessage {
     UpdateAction(Arc<RwLock<dyn Action>>, ActionDataID),
     Wayland(WLIcedMessage),
+    Noop,
 }
 
 impl std::fmt::Display for GeneratorIndex {
@@ -91,6 +93,15 @@ impl Default for IcedState {
     }
 }
 
+fn connect() -> impl futures_core::stream::Stream<Item = IcedMessage> {
+    iced::stream::channel(100, async |mut output| {
+        loop {
+            let _ = output.send(IcedMessage::Noop).await;
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    })
+}
+
 impl IcedState {
     fn update(&mut self, message: IcedMessage) {
         match message {
@@ -98,14 +109,21 @@ impl IcedState {
                 action_lock.write().unwrap().update(data, &self.generators)
             }
             IcedMessage::Wayland(v) => self.wayland.update(self, v),
+            IcedMessage::Noop => {}
         }
     }
 
     fn view(&self) -> iced::Element<'_, IcedMessage> {
         self.wayland.view(self)
     }
+
+    fn subscription(&self) -> iced::Subscription<IcedMessage> {
+        iced::Subscription::run(connect)
+    }
 }
 
 fn main() -> iced::Result {
-    iced::application(IcedState::default, IcedState::update, IcedState::view).run()
+    iced::application(IcedState::default, IcedState::update, IcedState::view)
+        .subscription(IcedState::subscription)
+        .run()
 }

@@ -38,30 +38,45 @@ impl Action for PactlAction {
         self.generator.clone()
     }
 
-    fn view<'a>(&self, self_lock: Arc<RwLock<dyn Action>>, generators: &'a Vec<Arc<dyn ActionGenerator<dyn Action>>>) -> iced::Element<'a, IcedMessage> {
+    fn view<'a>(
+        &self,
+        self_lock: Arc<RwLock<dyn Action>>,
+        generators: &'a Vec<Arc<dyn ActionGenerator<dyn Action>>>,
+    ) -> iced::Element<'a, IcedMessage> {
         let move_self_lock = self_lock.clone();
         let action_data = self.source.clone();
-        let gener: &PactlActionGenerator = generators[self.generator.index].as_any().downcast_ref().unwrap();
-        iced::widget::column![
-            iced::widget::combo_box(
-                &gener.action_datas,
-                "asdf",
-                action_data.as_ref(),
-                move |change| IcedMessage::UpdateAction(
-                    move_self_lock.clone(),
-                    change,
-                )
-            )
-        ].width(200).into()
+        let gener: &PactlActionGenerator = generators[self.generator.index]
+            .as_any()
+            .downcast_ref()
+            .unwrap();
+        iced::widget::column![iced::widget::combo_box(
+            &gener.action_datas,
+            "asdf",
+            action_data.as_ref(),
+            move |change| IcedMessage::UpdateAction(move_self_lock.clone(), change,)
+        )]
+        .width(200)
+        .into()
     }
 
-    fn update(&mut self, new_data: ActionDataID, generators: &Vec<Arc<dyn ActionGenerator<dyn Action>>>) {
-        let gener: &PactlActionGenerator = generators[self.generator.index].as_any().downcast_ref().unwrap();
+    fn update(
+        &mut self,
+        new_data: ActionDataID,
+        generators: &Vec<Arc<dyn ActionGenerator<dyn Action>>>,
+    ) {
+        let gener: &PactlActionGenerator = generators[self.generator.index]
+            .as_any()
+            .downcast_ref()
+            .unwrap();
 
         let mut comm = std::process::Command::new("sh");
         comm.args([
             "-c",
-            format!("pactl move-source-output {} {}", gener.loopback_id, new_data.id).as_str(),
+            format!(
+                "pactl move-source-output {} {}",
+                gener.loopback_id, new_data.id
+            )
+            .as_str(),
         ]);
         self.comm = Some(comm);
         self.source = Some(new_data);
@@ -85,11 +100,10 @@ impl PactlActionGenerator {
         assert!(loopback_id.len() > 0);
 
         let pa_sources_raw = std::process::Command::new("sh")
-            .args([
-                "-c",
-                "pactl -f json list sources",
-            ])
-            .output().expect("failed to get sources").stdout;
+            .args(["-c", "pactl -f json list sources"])
+            .output()
+            .expect("failed to get sources")
+            .stdout;
 
         let pa_sources_s = match str::from_utf8(&pa_sources_raw) {
             Ok(v) => v,
@@ -99,15 +113,21 @@ impl PactlActionGenerator {
         let pa_sources: Vec<PaSource> = serde_json::from_str(pa_sources_s).unwrap();
 
         // let pa_sources_json: Vec<PaSource> = serde_json::from_str(pa_sources_s).unwrap();
-        let action_datas = iced::widget::combo_box::State::<ActionDataID>::new(pa_sources
-            .iter()
-            .map(|s| ActionDataID {
-                _option_idx: 0,
-                id: s.index.into(),
-                description: s.name.clone(),
-            }).collect());
+        let action_datas = iced::widget::combo_box::State::<ActionDataID>::new(
+            pa_sources
+                .iter()
+                .map(|s| ActionDataID {
+                    _option_idx: 0,
+                    id: s.index.into(),
+                    description: s.name.clone(),
+                })
+                .collect(),
+        );
 
-        Self{loopback_id: loopback_id.to_string(), action_datas}
+        Self {
+            loopback_id: loopback_id.to_string(),
+            action_datas,
+        }
     }
 }
 
@@ -124,8 +144,46 @@ impl std::fmt::Display for PaSource {
 }
 
 impl ActionGenerator<dyn Action> for PactlActionGenerator {
-    fn build_action(self: Arc<PactlActionGenerator>, gener_idx: GeneratorIndex) -> Result<Arc<RwLock<dyn Action>>, String> {
-        Ok(Arc::new(RwLock::new(PactlAction { comm: None, source: None, generator: gener_idx })))
+    fn build_action(
+        self: Arc<PactlActionGenerator>,
+        gener_idx: GeneratorIndex,
+    ) -> Result<Arc<RwLock<dyn Action>>, String> {
+        Ok(Arc::new(RwLock::new(PactlAction {
+            comm: None,
+            source: None,
+            generator: gener_idx,
+        })))
+    }
+
+    fn build_action_by_desc(
+        self: Arc<PactlActionGenerator>,
+        gener_idx: GeneratorIndex,
+        desc: String,
+    ) -> Result<Arc<RwLock<dyn Action>>, String> {
+        let action_lock = Arc::new(RwLock::new(PactlAction {
+            comm: None,
+            source: None,
+            generator: gener_idx,
+        }));
+        {
+            let mut action = action_lock.write().unwrap();
+            let new_id = self
+                .action_datas
+                .options()
+                .iter()
+                .find(|d| d.description == desc)
+                .unwrap()
+                .id;
+
+            let mut comm = std::process::Command::new("sh");
+            comm.args([
+                "-c",
+                format!("pactl move-source-output {} {}", self.loopback_id, new_id).as_str(),
+            ]);
+
+            action.comm = Some(comm);
+        }
+        Ok(action_lock)
     }
 
     fn get_action_name(&self) -> String {

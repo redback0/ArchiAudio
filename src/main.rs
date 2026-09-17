@@ -93,15 +93,6 @@ impl Default for IcedState {
     }
 }
 
-fn connect() -> impl futures_core::stream::Stream<Item = IcedMessage> {
-    iced::stream::channel(100, async |mut output| {
-        loop {
-            let _ = output.send(IcedMessage::Noop).await;
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-    })
-}
-
 impl IcedState {
     fn update(&mut self, message: IcedMessage) {
         match message {
@@ -118,7 +109,7 @@ impl IcedState {
     }
 
     fn subscription(&self) -> iced::Subscription<IcedMessage> {
-        iced::Subscription::run(connect)
+        iced::Subscription::run(wayland::client)
     }
 }
 

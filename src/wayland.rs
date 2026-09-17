@@ -4,6 +4,7 @@ use std::{
 };
 
 use iced;
+use iced::futures::SinkExt;
 use wayland_client::{Connection, Dispatch, Proxy};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1 as top_level_handle,
@@ -13,7 +14,6 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 use crate::{Action, GeneratorIndex, IcedMessage, IcedState};
 
 pub struct Wayland {
-    _tc: std::sync::mpsc::Sender<ChannelMessage>,
     handles_lock: HandleVec,
 }
 
@@ -32,11 +32,6 @@ pub struct TLHandleActions {
 pub type HandleWrapper = Arc<RwLock<TLHandleActions>>;
 type HandleVec = Arc<RwLock<Vec<HandleWrapper>>>;
 
-enum ChannelMessage {
-    _CONTINUE,
-    _EXIT,
-}
-
 #[derive(Clone)]
 pub enum WLIcedMessage {
     ChangeActiveActionType(
@@ -45,6 +40,13 @@ pub enum WLIcedMessage {
         Option<Arc<RwLock<dyn Action>>>,
     ),
     RemoveAction(HandleWrapper, Arc<RwLock<dyn Action>>),
+    WLSetup(WLSetup),
+}
+
+#[derive(Clone)]
+pub enum WLSetup {
+    Sender(std::sync::mpsc::Sender<WLSetup>),
+    HandlesLock(HandleVec),
 }
 
 impl Wayland {
@@ -155,8 +157,57 @@ impl Wayland {
                     _ => {}
                 }
             }
+            WLIcedMessage::WLSetup(setup) => match setup {
+                WLSetup::Sender(tc) => {
+                    tc.send(WLSetup::HandlesLock(self.handles_lock.clone()))
+                        .unwrap();
+                }
+                WLSetup::HandlesLock(_) => panic!(),
+            },
         }
     }
+}
+
+pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
+    iced::stream::channel(100, async |mut output| {
+        let (tc, rc) = std::sync::mpsc::channel();
+        output
+            .send(IcedMessage::Wayland(WLIcedMessage::WLSetup(
+                WLSetup::Sender(tc),
+            )))
+            .await
+            .unwrap();
+
+        let handles_lock = match rc.recv().unwrap() {
+            WLSetup::HandlesLock(v) => v,
+            _ => panic!(),
+        };
+
+        let conn: Connection = Connection::connect_to_env().unwrap();
+        let (globals, mut event_queue) =
+            wayland_client::globals::registry_queue_init::<WaylandInternal>(&conn).unwrap();
+
+        let _toplevel_manager: top_level_manager::ZwlrForeignToplevelManagerV1 = globals
+            .bind(&event_queue.handle(), 3..=3, handles_lock.clone())
+            .unwrap();
+
+        let mut wl = WaylandInternal {
+            handles_lock: handles_lock.clone(),
+        };
+        event_queue.roundtrip(&mut wl).unwrap();
+
+        loop {
+            let read_lock = event_queue.prepare_read().unwrap();
+
+            match read_lock.read() {
+                Ok(_) => {
+                    let _ = event_queue.dispatch_pending(&mut wl);
+                }
+                Err(_) => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    })
 }
 
 impl Default for Wayland {
@@ -175,8 +226,6 @@ impl Default for Wayland {
         };
         event_queue.roundtrip(&mut wl).unwrap();
 
-        let (tc, rc) = std::sync::mpsc::channel();
-
         std::thread::spawn(move || {
             loop {
                 let read_lock = event_queue.prepare_read().unwrap();
@@ -187,18 +236,10 @@ impl Default for Wayland {
                     }
                     Err(_) => {}
                 }
-                match rc.try_recv() {
-                    Ok(ChannelMessage::_EXIT)
-                    | Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
-                    Ok(_) | Err(_) => {}
-                }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         });
-        Self {
-            _tc: tc,
-            handles_lock,
-        }
+        Self { handles_lock }
     }
 }
 

@@ -45,7 +45,7 @@ pub enum WLIcedMessage {
 
 #[derive(Clone)]
 pub enum WLSetup {
-    Sender(std::sync::mpsc::Sender<WLSetup>),
+    Sender(iced::futures::channel::mpsc::Sender<WLSetup>),
     HandlesLock(HandleVec),
 }
 
@@ -110,7 +110,7 @@ impl Wayland {
         iced::widget::scrollable(column).into()
     }
 
-    pub fn update(&self, state: &IcedState, message: WLIcedMessage) {
+    pub fn update(&self, state: &IcedState, message: WLIcedMessage) -> iced::Task<IcedMessage> {
         match message {
             WLIcedMessage::ChangeActiveActionType(gener_idx, handle_lock, action_lock_option) => {
                 let gener = state.generators[gener_idx.index].clone();
@@ -119,7 +119,7 @@ impl Wayland {
                         let action = action_lock.read().unwrap();
 
                         if gener_idx.index == action.get_generator().index {
-                            return;
+                            return iced::Task::none();
                         }
 
                         let mut handle = handle_lock.write().unwrap();
@@ -144,6 +144,7 @@ impl Wayland {
                             .push(gener.build_action(gener_idx).unwrap());
                     }
                 }
+                iced::Task::none()
             }
             WLIcedMessage::RemoveAction(handle_lock, action_lock) => {
                 let mut handle = handle_lock.write().unwrap();
@@ -156,11 +157,13 @@ impl Wayland {
                     Some(index) => _ = handle.active_actions.remove(index),
                     _ => {}
                 }
+                iced::Task::none()
             }
             WLIcedMessage::WLSetup(setup) => match setup {
-                WLSetup::Sender(tc) => {
-                    tc.send(WLSetup::HandlesLock(self.handles_lock.clone()))
+                WLSetup::Sender(mut tc) => {
+                    tc.try_send(WLSetup::HandlesLock(self.handles_lock.clone()))
                         .unwrap();
+                    iced::Task::none()
                 }
                 WLSetup::HandlesLock(_) => panic!(),
             },
@@ -170,7 +173,7 @@ impl Wayland {
 
 pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
     iced::stream::channel(100, async |mut output| {
-        let (tc, rc) = std::sync::mpsc::channel();
+        let (tc, mut rc) = iced::futures::channel::mpsc::channel(16);
         output
             .send(IcedMessage::Wayland(WLIcedMessage::WLSetup(
                 WLSetup::Sender(tc),
@@ -178,8 +181,8 @@ pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
             .await
             .unwrap();
 
-        let handles_lock = match rc.recv().unwrap() {
-            WLSetup::HandlesLock(v) => v,
+        let handles_lock = match rc.recv().await {
+            Ok(WLSetup::HandlesLock(v)) => v,
             _ => panic!(),
         };
 
@@ -205,7 +208,8 @@ pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
                 }
                 Err(_) => {}
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            output.send(IcedMessage::Noop).await.unwrap();
         }
     })
 }
@@ -213,7 +217,7 @@ pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
 impl Default for Wayland {
     fn default() -> Self {
         let handles_lock = HandleVec::new(std::sync::RwLock::new(vec![]));
-        let conn: Connection = Connection::connect_to_env().unwrap();
+        /*let conn: Connection = Connection::connect_to_env().unwrap();
         let (globals, mut event_queue) =
             wayland_client::globals::registry_queue_init::<WaylandInternal>(&conn).unwrap();
 
@@ -238,7 +242,7 @@ impl Default for Wayland {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-        });
+        });*/
         Self { handles_lock }
     }
 }

@@ -1,4 +1,3 @@
-use iced::futures::SinkExt;
 use std::sync::{Arc, RwLock};
 
 use iced;
@@ -94,13 +93,14 @@ impl Default for IcedState {
 }
 
 impl IcedState {
-    fn update(&mut self, message: IcedMessage) {
+    fn update(&mut self, message: IcedMessage) -> iced::Task<IcedMessage> {
         match message {
             IcedMessage::UpdateAction(action_lock, data) => {
-                action_lock.write().unwrap().update(data, &self.generators)
+                action_lock.write().unwrap().update(data, &self.generators);
+                iced::Task::none()
             }
             IcedMessage::Wayland(v) => self.wayland.update(self, v),
-            IcedMessage::Noop => {}
+            IcedMessage::Noop => iced::Task::none(),
         }
     }
 

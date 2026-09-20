@@ -19,6 +19,7 @@ pub struct Wayland {
 
 struct WaylandInternal {
     handles_lock: HandleVec,
+    iced_sender: iced::futures::channel::mpsc::Sender<IcedMessage>,
 }
 
 pub struct TLHandleActions {
@@ -40,6 +41,7 @@ pub enum WLIcedMessage {
         Option<Arc<RwLock<dyn Action>>>,
     ),
     RemoveAction(HandleWrapper, Arc<RwLock<dyn Action>>),
+    AddAction(HandleWrapper, Arc<RwLock<dyn Action>>),
     WLSetup(WLSetup),
 }
 
@@ -146,6 +148,12 @@ impl Wayland {
                 }
                 iced::Task::none()
             }
+            WLIcedMessage::AddAction(handle_lock, action_lock) => {
+                let mut handle = handle_lock.write().unwrap();
+
+                handle.active_actions.push(action_lock);
+                iced::Task::none()
+            }
             WLIcedMessage::RemoveAction(handle_lock, action_lock) => {
                 let mut handle = handle_lock.write().unwrap();
 
@@ -168,6 +176,12 @@ impl Wayland {
                 WLSetup::HandlesLock(_) => panic!(),
             },
         }
+    }
+
+    pub fn add_action(handle_lock: HandleWrapper, action_lock: Arc<RwLock<dyn Action + 'static>>) {
+        let mut handle = handle_lock.write().unwrap();
+
+        handle.active_actions.push(action_lock);
     }
 }
 
@@ -196,6 +210,7 @@ pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
 
         let mut wl = WaylandInternal {
             handles_lock: handles_lock.clone(),
+            iced_sender: output,
         };
         event_queue.roundtrip(&mut wl).unwrap();
 
@@ -209,7 +224,6 @@ pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
                 Err(_) => {}
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            output.send(IcedMessage::Noop).await.unwrap();
         }
     })
 }
@@ -217,33 +231,13 @@ pub fn client() -> impl futures_core::stream::Stream<Item = IcedMessage> {
 impl Default for Wayland {
     fn default() -> Self {
         let handles_lock = HandleVec::new(std::sync::RwLock::new(vec![]));
-        /*let conn: Connection = Connection::connect_to_env().unwrap();
-        let (globals, mut event_queue) =
-            wayland_client::globals::registry_queue_init::<WaylandInternal>(&conn).unwrap();
-
-        let _toplevel_manager: top_level_manager::ZwlrForeignToplevelManagerV1 = globals
-            .bind(&event_queue.handle(), 3..=3, handles_lock.clone())
-            .unwrap();
-
-        let mut wl = WaylandInternal {
-            handles_lock: handles_lock.clone(),
-        };
-        event_queue.roundtrip(&mut wl).unwrap();
-
-        std::thread::spawn(move || {
-            loop {
-                let read_lock = event_queue.prepare_read().unwrap();
-
-                match read_lock.read() {
-                    Ok(_) => {
-                        let _ = event_queue.dispatch_pending(&mut wl);
-                    }
-                    Err(_) => {}
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        });*/
         Self { handles_lock }
+    }
+}
+
+impl TLHandleActions {
+    pub fn get_title(&self) -> String {
+        self.title.clone()
     }
 }
 
@@ -314,6 +308,7 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
             top_level_handle::Event::Title { title } => {
                 let mut handle_data = handle_data_lock.write().unwrap();
                 handle_data.title = title;
+                wl_state.iced_sender.try_send(IcedMessage::Noop).ok();
             }
             top_level_handle::Event::AppId { app_id } => {
                 let mut handle_data = handle_data_lock.write().unwrap();
@@ -357,6 +352,7 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
                     Some(index) => _ = handles.remove(index),
                     _ => {}
                 }
+                wl_state.iced_sender.try_send(IcedMessage::Noop).ok();
             }
             _ => {}
         }

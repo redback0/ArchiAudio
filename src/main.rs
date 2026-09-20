@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use iced;
@@ -6,7 +7,7 @@ mod pactl_action;
 mod wayland;
 
 use crate::pactl_action::PactlActionGenerator;
-use crate::wayland::{WLIcedMessage, Wayland};
+use crate::wayland::{HandleWrapper, WLIcedMessage, Wayland};
 
 pub trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
@@ -50,14 +51,27 @@ pub struct ActionDataID {
     description: String,
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct EventDesc {
+    provider_desc: String,
+    event_desc: String,
+}
+
+struct ActionDesc {
+    gen_desc: String,
+    action_desc: String,
+}
+
 struct IcedState {
     generators: Vec<Arc<dyn ActionGenerator<dyn Action>>>,
     generators_state: iced::widget::combo_box::State<GeneratorIndex>,
     wayland: Wayland,
+    saved_actions: BTreeMap<EventDesc, ActionDesc>,
 }
 
 #[derive(Clone)]
 pub enum IcedMessage {
+    NewWlEvent(HandleWrapper),
     UpdateAction(Arc<RwLock<dyn Action>>, ActionDataID),
     Wayland(WLIcedMessage),
     Noop,
@@ -81,6 +95,7 @@ impl Default for IcedState {
             generators: vec![Arc::new(PactlActionGenerator::new())],
             generators_state: iced::widget::combo_box::State::default(),
             wayland: Wayland::default(),
+            saved_actions: BTreeMap::new(),
         };
         for (index, gener) in s.generators.iter().enumerate() {
             s.generators_state.push(GeneratorIndex {
@@ -95,6 +110,38 @@ impl Default for IcedState {
 impl IcedState {
     fn update(&mut self, message: IcedMessage) -> iced::Task<IcedMessage> {
         match message {
+            IcedMessage::NewWlEvent(handle_lock) => {
+                let event_desc = EventDesc {
+                    provider_desc: String::new(), // fix this later
+                    event_desc: handle_lock.read().unwrap().get_title(),
+                };
+
+                let action_desc_opt = self.saved_actions.get(&event_desc);
+
+                if action_desc_opt.is_some() {
+                    let action_desc = action_desc_opt.unwrap();
+
+                    for (index, gener) in self.generators.iter().enumerate() {
+                        if gener.get_action_name() == action_desc.gen_desc {
+                            wayland::Wayland::add_action(
+                                handle_lock.clone(),
+                                gener
+                                    .clone()
+                                    .build_action_by_desc(
+                                        GeneratorIndex {
+                                            index,
+                                            name: format!("{}", gener),
+                                        },
+                                        action_desc.action_desc.clone(),
+                                    )
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                }
+
+                iced::Task::none()
+            }
             IcedMessage::UpdateAction(action_lock, data) => {
                 action_lock.write().unwrap().update(data, &self.generators);
                 iced::Task::none()

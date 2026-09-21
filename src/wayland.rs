@@ -308,7 +308,10 @@ impl Dispatch<top_level_handle::ZwlrForeignToplevelHandleV1, HandleWrapper> for 
             top_level_handle::Event::Title { title } => {
                 let mut handle_data = handle_data_lock.write().unwrap();
                 handle_data.title = title;
-                wl_state.iced_sender.try_send(IcedMessage::Noop).ok();
+                wl_state
+                    .iced_sender
+                    .try_send(IcedMessage::NewWlEvent(handle_data_lock.clone()))
+                    .ok();
             }
             top_level_handle::Event::AppId { app_id } => {
                 let mut handle_data = handle_data_lock.write().unwrap();

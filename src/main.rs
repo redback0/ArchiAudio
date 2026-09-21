@@ -3,6 +3,8 @@ use std::sync::{Arc, RwLock};
 
 use iced;
 
+use serde::{Deserialize, Serialize};
+
 mod pactl_action;
 mod wayland;
 
@@ -62,6 +64,14 @@ struct ActionDesc {
     action_desc: String,
 }
 
+#[derive(Deserialize, Serialize)]
+struct SavedActionDesc {
+    provider_desc: String,
+    event_desc: String,
+    gen_desc: String,
+    action_desc: String,
+}
+
 struct IcedState {
     generators: Vec<Arc<dyn ActionGenerator<dyn Action>>>,
     generators_state: iced::widget::combo_box::State<GeneratorIndex>,
@@ -91,18 +101,50 @@ impl std::fmt::Display for ActionDataID {
 
 impl Default for IcedState {
     fn default() -> Self {
+        let geners: Vec<Arc<dyn ActionGenerator<dyn Action>>> =
+            vec![Arc::new(PactlActionGenerator::new())];
         let mut s = Self {
-            generators: vec![Arc::new(PactlActionGenerator::new())],
-            generators_state: iced::widget::combo_box::State::default(),
+            generators_state: iced::widget::combo_box::State::new(
+                geners
+                    .iter()
+                    .enumerate()
+                    .map(|(index, gener)| GeneratorIndex {
+                        index,
+                        name: format!("{}", gener),
+                    })
+                    .collect(),
+            ),
+            generators: geners,
             wayland: Wayland::default(),
             saved_actions: BTreeMap::new(),
         };
-        for (index, gener) in s.generators.iter().enumerate() {
-            s.generators_state.push(GeneratorIndex {
-                index,
-                name: format!("{}", gener),
-            })
-        }
+
+        let mut path = std::env::home_dir().unwrap();
+        path.push(".local/share/ArchiAudio/saved_actions.json");
+        let saved_actions_raw = {
+            match std::fs::read(path) {
+                Ok(raw) => raw,
+                Err(_err) => vec![],
+            }
+        };
+
+        let saved_actions_vec: Vec<SavedActionDesc> =
+            serde_json::from_slice(&saved_actions_raw).unwrap_or_default();
+
+        s.saved_actions
+            .extend(saved_actions_vec.iter().map(|saved_action| {
+                (
+                    EventDesc {
+                        provider_desc: saved_action.provider_desc.clone(),
+                        event_desc: saved_action.event_desc.clone(),
+                    },
+                    ActionDesc {
+                        gen_desc: saved_action.gen_desc.clone(),
+                        action_desc: saved_action.action_desc.clone(),
+                    },
+                )
+            }));
+
         s
     }
 }
@@ -112,9 +154,14 @@ impl IcedState {
         match message {
             IcedMessage::NewWlEvent(handle_lock) => {
                 let event_desc = EventDesc {
-                    provider_desc: String::new(), // fix this later
+                    provider_desc: String::new(), // TODO: actually specify what provider this is
                     event_desc: handle_lock.read().unwrap().get_title(),
                 };
+
+                //println!(
+                //    "::{}::, ::{}::",
+                //    event_desc.provider_desc, event_desc.event_desc
+                //);
 
                 let action_desc_opt = self.saved_actions.get(&event_desc);
 
@@ -123,19 +170,18 @@ impl IcedState {
 
                     for (index, gener) in self.generators.iter().enumerate() {
                         if gener.get_action_name() == action_desc.gen_desc {
-                            wayland::Wayland::add_action(
-                                handle_lock.clone(),
-                                gener
-                                    .clone()
-                                    .build_action_by_desc(
-                                        GeneratorIndex {
-                                            index,
-                                            name: format!("{}", gener),
-                                        },
-                                        action_desc.action_desc.clone(),
-                                    )
-                                    .unwrap(),
-                            );
+                            match gener.clone().build_action_by_desc(
+                                GeneratorIndex {
+                                    index,
+                                    name: format!("{}", gener),
+                                },
+                                action_desc.action_desc.clone(),
+                            ) {
+                                Ok(new_action) => {
+                                    wayland::Wayland::add_action(handle_lock.clone(), new_action)
+                                }
+                                Err(str) => println!("Failed to create action: {}", str),
+                            }
                         }
                     }
                 }

@@ -51,7 +51,7 @@ impl Action for PactlAction {
             .unwrap();
         iced::widget::column![iced::widget::combo_box(
             &gener.action_datas,
-            "asdf",
+            "select source...",
             action_data.as_ref(),
             move |change| IcedMessage::UpdateAction(move_self_lock.clone(), change,)
         )]
@@ -167,21 +167,29 @@ impl ActionGenerator<dyn Action> for PactlActionGenerator {
         }));
         {
             let mut action = action_lock.write().unwrap();
-            let new_id = self
+            let new_data_opt = self
                 .action_datas
                 .options()
                 .iter()
-                .find(|d| d.description == desc)
-                .unwrap()
-                .id;
+                .find(|d| d.description == desc);
 
+            if new_data_opt.is_none() {
+                return Err(format!("No such source: {}", desc));
+            }
+
+            let new_data = new_data_opt.unwrap();
             let mut comm = std::process::Command::new("sh");
             comm.args([
                 "-c",
-                format!("pactl move-source-output {} {}", self.loopback_id, new_id).as_str(),
+                format!(
+                    "pactl move-source-output {} {}",
+                    self.loopback_id, new_data.id
+                )
+                .as_str(),
             ]);
 
             action.comm = Some(comm);
+            action.source = Some(new_data.clone());
         }
         Ok(action_lock)
     }

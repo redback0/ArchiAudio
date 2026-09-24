@@ -99,11 +99,69 @@ impl std::fmt::Display for ActionDataID {
     }
 }
 
+fn save_actions(actions: BTreeMap<EventDesc, ActionDesc>) -> Result<(), String> {
+    let mut path = match std::env::home_dir() {
+        Some(v) => v,
+        None => return Err(format!("Could not find home dir")),
+    };
+    path.push(".local/share/ArchiAudio/saved_actions.json");
+
+    let actions_json = match serde_json::to_vec(
+        &actions
+            .iter()
+            .map(|(event, action)| SavedActionDesc {
+                provider_desc: event.provider_desc.clone(),
+                event_desc: event.event_desc.clone(),
+                gen_desc: action.gen_desc.clone(),
+                action_desc: action.action_desc.clone(),
+            })
+            .collect::<Vec<_>>(),
+    ) {
+        Ok(v) => v,
+        Err(err) => return Err(format!("Failed to serialize: {}", err)),
+    };
+
+    match std::fs::write(path, actions_json) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(format!("Failed to write file: {}", err)),
+    }
+}
+
+fn load_saved_actions() -> BTreeMap<EventDesc, ActionDesc> {
+    let mut path = match std::env::home_dir() {
+        Some(v) => v,
+        None => return BTreeMap::new(),
+    };
+    path.push(".local/share/ArchiAudio/saved_actions.json");
+    let saved_actions_raw = {
+        match std::fs::read(path) {
+            Ok(raw) => raw,
+            Err(_err) => vec![],
+        }
+    };
+
+    let saved_actions_vec: Vec<SavedActionDesc> =
+        serde_json::from_slice(&saved_actions_raw).unwrap_or_default();
+
+    BTreeMap::from_iter(saved_actions_vec.iter().map(|saved_action| {
+        (
+            EventDesc {
+                provider_desc: saved_action.provider_desc.clone(),
+                event_desc: saved_action.event_desc.clone(),
+            },
+            ActionDesc {
+                gen_desc: saved_action.gen_desc.clone(),
+                action_desc: saved_action.action_desc.clone(),
+            },
+        )
+    }))
+}
+
 impl Default for IcedState {
     fn default() -> Self {
         let geners: Vec<Arc<dyn ActionGenerator<dyn Action>>> =
             vec![Arc::new(PactlActionGenerator::new())];
-        let mut s = Self {
+        let s = Self {
             generators_state: iced::widget::combo_box::State::new(
                 geners
                     .iter()
@@ -116,34 +174,8 @@ impl Default for IcedState {
             ),
             generators: geners,
             wayland: Wayland::default(),
-            saved_actions: BTreeMap::new(),
+            saved_actions: load_saved_actions(),
         };
-
-        let mut path = std::env::home_dir().unwrap();
-        path.push(".local/share/ArchiAudio/saved_actions.json");
-        let saved_actions_raw = {
-            match std::fs::read(path) {
-                Ok(raw) => raw,
-                Err(_err) => vec![],
-            }
-        };
-
-        let saved_actions_vec: Vec<SavedActionDesc> =
-            serde_json::from_slice(&saved_actions_raw).unwrap_or_default();
-
-        s.saved_actions
-            .extend(saved_actions_vec.iter().map(|saved_action| {
-                (
-                    EventDesc {
-                        provider_desc: saved_action.provider_desc.clone(),
-                        event_desc: saved_action.event_desc.clone(),
-                    },
-                    ActionDesc {
-                        gen_desc: saved_action.gen_desc.clone(),
-                        action_desc: saved_action.action_desc.clone(),
-                    },
-                )
-            }));
 
         s
     }

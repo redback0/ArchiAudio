@@ -84,7 +84,7 @@ impl Wayland {
                     iced::widget::button("X").on_press(IcedMessage::Wayland(
                         WLIcedMessage::RemoveAction(handle_lock.clone(), action_lock.clone())
                     )),
-                    action.view(action_lock.clone(), &state.generators)
+                    action.view(action_lock.clone(), handle_lock.clone(), &state.generators)
                 ];
                 act_col = act_col.push(act_row);
             }

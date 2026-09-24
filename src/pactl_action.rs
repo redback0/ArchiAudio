@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Action, ActionDataID, ActionGenerator, GeneratorIndex, IcedMessage};
+use crate::{Action, ActionDataID, ActionGenerator, GeneratorIndex, IcedMessage, wayland};
 
 pub struct PactlAction {
     comm: Option<std::process::Command>,
@@ -38,9 +38,17 @@ impl Action for PactlAction {
         self.generator.clone()
     }
 
+    fn get_description(&self) -> Option<String> {
+        match self.source {
+            Some(ref source) => Some(source.description.clone()),
+            None => None,
+        }
+    }
+
     fn view<'a>(
         &self,
         self_lock: Arc<RwLock<dyn Action>>,
+        parent_event: Arc<RwLock<wayland::TLHandleActions>>,
         generators: &'a Vec<Arc<dyn ActionGenerator<dyn Action>>>,
     ) -> iced::Element<'a, IcedMessage> {
         let move_self_lock = self_lock.clone();
@@ -49,13 +57,25 @@ impl Action for PactlAction {
             .as_any()
             .downcast_ref()
             .unwrap();
-        iced::widget::column![iced::widget::combo_box(
+        let row = iced::widget::row![iced::widget::combo_box(
             &gener.action_datas,
             "select source...",
             action_data.as_ref(),
-            move |change| IcedMessage::UpdateAction(move_self_lock.clone(), change,)
+            move |change| IcedMessage::UpdateAction(move_self_lock.clone(), change)
         )]
-        .width(200)
+        .width(200);
+
+        match action_data {
+            Some(_) => row.push(
+                iced::widget::button("S")
+                    .on_press(IcedMessage::SaveAction(
+                        parent_event.clone(),
+                        self_lock.clone(),
+                    ))
+                    .width(30),
+            ),
+            None => row,
+        }
         .into()
     }
 

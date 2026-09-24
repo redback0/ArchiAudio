@@ -9,14 +9,16 @@ mod pactl_action;
 mod wayland;
 
 use crate::pactl_action::PactlActionGenerator;
-use crate::wayland::{HandleWrapper, WLIcedMessage, Wayland};
+use crate::wayland::{HandleWrapper, TLHandleActions, WLIcedMessage, Wayland};
 
 pub trait Action: Send + Sync {
     fn trigger(&mut self) -> Result<(), String>;
     fn get_generator(&self) -> GeneratorIndex;
+    fn get_description(&self) -> Option<String>;
     fn view<'a>(
         &self,
         self_lock: Arc<RwLock<dyn Action>>,
+        parent_event: Arc<RwLock<wayland::TLHandleActions>>,
         generators: &'a Vec<Arc<dyn ActionGenerator<dyn Action>>>,
     ) -> iced::Element<'a, IcedMessage>;
     fn update(
@@ -83,6 +85,7 @@ struct IcedState {
 pub enum IcedMessage {
     NewWlEvent(HandleWrapper),
     UpdateAction(Arc<RwLock<dyn Action>>, ActionDataID),
+    SaveAction(Arc<RwLock<TLHandleActions>>, Arc<RwLock<dyn Action>>),
     Wayland(WLIcedMessage),
     Noop,
 }
@@ -99,7 +102,7 @@ impl std::fmt::Display for ActionDataID {
     }
 }
 
-fn save_actions(actions: BTreeMap<EventDesc, ActionDesc>) -> Result<(), String> {
+fn save_actions(actions: &BTreeMap<EventDesc, ActionDesc>) -> Result<(), String> {
     let mut path = match std::env::home_dir() {
         Some(v) => v,
         None => return Err(format!("Could not find home dir")),
@@ -222,6 +225,27 @@ impl IcedState {
             }
             IcedMessage::UpdateAction(action_lock, data) => {
                 action_lock.write().unwrap().update(data, &self.generators);
+                iced::Task::none()
+            }
+            IcedMessage::SaveAction(event_lock, action_lock) => {
+                let event = event_lock.read().unwrap();
+                let action = action_lock.read().unwrap();
+
+                self.saved_actions.insert(
+                    EventDesc {
+                        provider_desc: String::new(),
+                        event_desc: event.get_title(),
+                    },
+                    ActionDesc {
+                        gen_desc: self
+                            .generators
+                            .get(action.get_generator().index)
+                            .unwrap()
+                            .get_action_name(),
+                        action_desc: action.get_description().unwrap(),
+                    },
+                );
+                let _ = save_actions(&self.saved_actions);
                 iced::Task::none()
             }
             IcedMessage::Wayland(v) => self.wayland.update(self, v),
